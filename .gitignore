@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+.langgraph_api/
+.pytest_cache/
+.DS_Store
+corpus/embeddings.npy
+corpus/chunk_meta.json
+corpus/chunks.json
+corpus/chapters.json
+web/node_modules/
+web/.next/
+web/.env.local
+web/*.tsbuildinfo

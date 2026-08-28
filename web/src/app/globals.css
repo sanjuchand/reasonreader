@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f3ead8;
+  --paper-2: #efe4cc;
+  --ink: #1c1612;
+  --ink-soft: #4a4036;
+  --forest: #1c2d24;
+  --forest-2: #24382d;
+  --gold: #c4a15a;
+  --gold-2: #9a7840;
+  --rule: #d9c9ae;
+  --chat: #f7f1e6;
+  --miss: #8a2f2f;
+  --mastered: #2f6b45;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--forest);
+  color: var(--ink);
+}
+
+.cite-flash {
+  animation: cite-flash 1.6s ease;
+}
+
+@keyframes cite-flash {
+  0% {
+    background: #f0d48a;
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+.reader-scroll::-webkit-scrollbar,
+.toc-scroll::-webkit-scrollbar,
+.chat-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.reader-scroll::-webkit-scrollbar-thumb,
+.toc-scroll::-webkit-scrollbar-thumb,
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--gold) 55%, transparent);
+  border-radius: 99px;
+}
