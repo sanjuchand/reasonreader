@@ -5,6 +5,7 @@ import { users } from "@/lib/db/schema";
 import { GoogleTokenError, verifyGoogleIdToken } from "@/lib/auth/google";
 import { createSessionToken, sessionCookieOptions, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { seedFirstUnit } from "@/lib/progress";
+import { DEMO_COPY_ID } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,7 @@ export async function POST(request: Request) {
         .values({ googleSub: claims.sub, email, name, avatarUrl })
         .returning();
       user = inserted[0];
-      await seedFirstUnit(user.id);
+      await seedFirstUnit(user.id, DEMO_COPY_ID);
     } else {
       const updated = await db
         .update(users)

@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/current-user";
 import { loadCorpus } from "@/lib/corpus";
 import { loadMasteryMap, replaceProgress, resetProgress } from "@/lib/progress";
 import { replaceThread } from "@/lib/langgraph";
+import { getAccessibleCopy } from "@/lib/copies";
 import type { MasteryEntry, Unit } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -28,11 +29,22 @@ function statusOf(unit: Unit, mastery: Record<string, MasteryEntry>): string {
   return mastery[unit.id]?.status || (mastery[unit.id]?.unlocked ? "in_progress" : "locked");
 }
 
-export async function GET() {
+async function copyContext(request: NextRequest) {
   const user = await getSessionUser();
-  if (!user) return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
-  const corpus = await loadCorpus();
-  const mastery = await loadMasteryMap(user.id);
+  if (!user) return { error: NextResponse.json({ detail: "Not authenticated" }, { status: 401 }) };
+  const copyId = request.nextUrl.searchParams.get("copyId");
+  if (!copyId) return { error: NextResponse.json({ detail: "Not found" }, { status: 404 }) };
+  const copy = await getAccessibleCopy(user.id, copyId);
+  if (!copy) return { error: NextResponse.json({ detail: "Not found" }, { status: 404 }) };
+  return { user, copy };
+}
+
+export async function GET(request: NextRequest) {
+  const ctx = await copyContext(request);
+  if ("error" in ctx && ctx.error) return ctx.error;
+  const { user, copy } = ctx as { user: { id: string }; copy: { id: string } };
+  const corpus = await loadCorpus(copy.id);
+  const mastery = await loadMasteryMap(user.id, copy.id);
   const books: BookProgress[] = [];
   for (const unit of corpus.units) {
     let group = books[books.length - 1];
@@ -74,21 +86,23 @@ export async function GET() {
   return NextResponse.json(payload);
 }
 
-export async function POST(request: Request) {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
+export async function POST(request: NextRequest) {
+  const ctx = await copyContext(request);
+  if ("error" in ctx && ctx.error) return ctx.error;
+  const { user, copy } = ctx as { user: { id: string }; copy: { id: string } };
   const body = (await request.json().catch(() => null)) as { mastery?: Record<string, MasteryEntry> } | null;
   if (!body?.mastery) {
     return NextResponse.json({ detail: "Missing mastery" }, { status: 400 });
   }
-  await replaceProgress(user.id, body.mastery);
+  await replaceProgress(user.id, copy.id, body.mastery);
   return NextResponse.json({ ok: true });
 }
 
-export async function DELETE() {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
-  await resetProgress(user.id);
-  const threadId = await replaceThread(user.id);
+export async function DELETE(request: NextRequest) {
+  const ctx = await copyContext(request);
+  if ("error" in ctx && ctx.error) return ctx.error;
+  const { user, copy } = ctx as { user: { id: string }; copy: { id: string } };
+  await resetProgress(user.id, copy.id);
+  const threadId = await replaceThread(user.id, copy.id);
   return NextResponse.json({ ok: true, threadId });
 }

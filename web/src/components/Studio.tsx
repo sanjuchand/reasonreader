@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStream } from "@langchain/langgraph-sdk/react";
-import { BookOpen, LogOut, RotateCcw } from "lucide-react";
+import { BookOpen, LogOut, RotateCcw, Library } from "lucide-react";
 import { ChatPanel } from "@/components/ChatPanel";
 import { Reader } from "@/components/Reader";
 import { Toc } from "@/components/Toc";
@@ -18,7 +18,7 @@ function unitLabel(unit: Unit) {
   return `${unit.book}: ${unit.title}${part}`;
 }
 
-export function Studio() {
+export function Studio({ copyId }: { copyId: string }) {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
 
@@ -29,10 +29,16 @@ export function Studio() {
   if (authLoading || !user) {
     return <div className="h-screen bg-[#1c2d24]" />;
   }
-  return <StudioApp user={user} />;
+  return <StudioApp user={user} copyId={copyId} />;
 }
 
-function StudioApp({ user }: { user: NonNullable<ReturnType<typeof useAuth>["user"]> }) {
+function StudioApp({
+  user,
+  copyId,
+}: {
+  user: NonNullable<ReturnType<typeof useAuth>["user"]>;
+  copyId: string;
+}) {
   const { logout } = useAuth();
   const router = useRouter();
   const [corpus, setCorpus] = useState<Corpus | null>(null);
@@ -42,25 +48,28 @@ function StudioApp({ user }: { user: NonNullable<ReturnType<typeof useAuth>["use
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [workTitle, setWorkTitle] = useState("Ken");
+  const progressUrl = `/api/progress?copyId=${encodeURIComponent(copyId)}`;
 
   useEffect(() => {
-    fetch("/api/corpus")
+    fetch(`/api/copies/${copyId}/corpus`)
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed to load corpus");
         setCorpus(data);
+        if (data.book?.title) setWorkTitle(data.book.title);
       })
       .catch((err: Error) => setCorpusError(err.message));
-  }, []);
+  }, [copyId]);
 
   const refreshProgress = useCallback(() => {
-    return fetch("/api/progress")
+    return fetch(progressUrl)
       .then(async (res) => {
         if (!res.ok) return;
         setProgress(await res.json());
       })
       .catch(() => undefined);
-  }, []);
+  }, [progressUrl]);
 
   useEffect(() => {
     if (!user) return;
@@ -68,13 +77,13 @@ function StudioApp({ user }: { user: NonNullable<ReturnType<typeof useAuth>["use
   }, [user, refreshProgress]);
 
   useEffect(() => {
-    fetch("/api/tutor/info")
+    fetch(`/api/tutor/${copyId}/info`)
       .then((res) => setConnected(res.ok))
       .catch(() => setConnected(false));
-  }, []);
+  }, [copyId]);
 
   const stream = useStream<TutorState>({
-    apiUrl: "/api/tutor",
+    apiUrl: `/api/tutor/${copyId}`,
     assistantId: ASSISTANT_ID,
     threadId,
     onThreadId: (id) => setThreadId(id),
@@ -107,22 +116,23 @@ function StudioApp({ user }: { user: NonNullable<ReturnType<typeof useAuth>["use
     const encoded = JSON.stringify(values.mastery);
     if (encoded === lastSyncedMastery.current) return;
     lastSyncedMastery.current = encoded;
-    void fetch("/api/progress", {
+    void fetch(progressUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mastery: values.mastery }),
     }).then(() => refreshProgress());
-  }, [values.mastery, refreshProgress]);
+  }, [values.mastery, refreshProgress, progressUrl]);
 
   const submitText = useCallback(
     (text: string, extra?: Partial<TutorState>) => {
       stream.submit({
         messages: [{ type: "human", content: text }],
         current_chapter_id: extra?.current_chapter_id ?? activeId,
+        copy_id: copyId,
         ...extra,
       });
     },
-    [stream, activeId],
+    [stream, activeId, copyId],
   );
 
   const openUnit = useCallback(
@@ -142,8 +152,8 @@ function StudioApp({ user }: { user: NonNullable<ReturnType<typeof useAuth>["use
   );
 
   const reset = async () => {
-    if (!window.confirm("Reset your progress and start the Introduction again?")) return;
-    const res = await fetch("/api/progress", { method: "DELETE" });
+    if (!window.confirm("Reset your progress on this copy?")) return;
+    const res = await fetch(progressUrl, { method: "DELETE" });
     const data = await res.json().catch(() => ({}));
     setPinnedId(null);
     if (data.threadId) setThreadId(data.threadId);
@@ -157,10 +167,11 @@ function StudioApp({ user }: { user: NonNullable<ReturnType<typeof useAuth>["use
         <div className="flex items-center gap-2">
           <BookOpen className="size-4 text-[#c4a15a]" />
           <div>
-            <div className="text-[13px] font-semibold tracking-wide">The Wealth of Nations</div>
+            <div className="text-[13px] font-semibold tracking-wide">Ken</div>
             <div className="text-[11px] text-[#cbbda4]">
-              Chapter-mastery tutor · {values.mode ?? "teach"}
+              {workTitle}
               {activeUnit ? ` · ${activeUnit.book}` : ""}
+              {values.mode ? ` · ${values.mode}` : ""}
               {progress ? ` · ~${Math.round((progress.remainingWords || 0) / 100) / 10}k words left` : ""}
             </div>
           </div>
@@ -170,6 +181,14 @@ function StudioApp({ user }: { user: NonNullable<ReturnType<typeof useAuth>["use
           <span className="max-w-[140px] truncate text-[#cbbda4]" title={user.email}>
             {user.name || user.email}
           </span>
+          <button
+            type="button"
+            onClick={() => router.push("/")}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[#cbbda4] hover:bg-white/10 hover:text-white"
+          >
+            <Library className="size-3.5" />
+            Library
+          </button>
           <button
             type="button"
             onClick={() => void reset()}
@@ -223,6 +242,7 @@ function StudioApp({ user }: { user: NonNullable<ReturnType<typeof useAuth>["use
             onCite={setHighlightId}
             citeIndex={citeIndex}
             onBegin={firstId ? () => openUnit(firstId) : undefined}
+            beginLabel="Begin"
             onSend={(text) => submitText(text)}
             onQuiz={(answers) =>
               submitText(`[[QUIZ_SUBMISSION]]\n${JSON.stringify({ answers })}`)

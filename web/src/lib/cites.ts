@@ -9,8 +9,8 @@ export type CiteHit = {
 
 export type CiteIndex = Record<string, CiteHit>;
 
-const CITE_RE = /\[@([^\]]+)\]|\[((?:chap\d+(?:-p\d+)?):p\d+)\]/g;
-const PARA_ID = /(?:chap\d+(?:-p\d+)?):p\d+/;
+const CITE_RE = /\[@([^\]]+)\]|\[((?:u\d+|chap\d+(?:-p\d+)?):p\d+)\]/g;
+const PARA_ID = /(?:u\d+|chap\d+(?:-p\d+)?):p\d+/;
 
 export function buildCiteIndex(units: Unit[]): CiteIndex {
   const index: CiteIndex = {};

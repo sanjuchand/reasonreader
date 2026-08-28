@@ -1,53 +1,59 @@
-"""Load curriculum units and search embedded chunks."""
+"""Load curriculum units and search embedded chunks for one copy."""
 
 from __future__ import annotations
 
+import io
 import json
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent
-CORPUS = ROOT / "corpus"
-EMBED_MODEL = "text-embedding-3-small"
+import blob_store
+from ingest.constants import DEMO_COPY_ID, EMBED_MODEL, ROOT
 
 load_dotenv(ROOT / ".env")
 
 
 class CorpusNotBuiltError(FileNotFoundError):
-    def __init__(self, missing: Path) -> None:
+    def __init__(self, copy_id: str, missing: str) -> None:
         super().__init__(
-            f"Missing {missing}. Run `uv run python ingest.py --embed` from the project root first."
+            f"Missing {missing} for copy {copy_id}. Seed or ingest that copy first."
         )
+        self.copy_id = copy_id
 
 
-@lru_cache(maxsize=1)
-def load_book() -> dict:
-    path = CORPUS / "chapters.json"
-    if not path.exists():
-        raise CorpusNotBuiltError(path)
-    return json.loads(path.read_text(encoding="utf-8"))
+def bust_copy(copy_id: str) -> None:
+    load_book.cache_clear()
+    _load_vectors.cache_clear()
+    _ = copy_id
 
 
-def load_units() -> list[dict]:
-    return load_book()["units"]
+@lru_cache(maxsize=16)
+def load_book(copy_id: str = DEMO_COPY_ID) -> dict:
+    key = blob_store.copy_key(copy_id, "chapters.json")
+    if not blob_store.exists(key):
+        raise CorpusNotBuiltError(copy_id, key)
+    return json.loads(blob_store.get_bytes(key).decode("utf-8"))
 
 
-def get_unit(unit_id: str) -> dict | None:
-    for unit in load_units():
+def load_units(copy_id: str = DEMO_COPY_ID) -> list[dict]:
+    return load_book(copy_id)["units"]
+
+
+def get_unit(copy_id: str, unit_id: str) -> dict | None:
+    for unit in load_units(copy_id):
         if unit["id"] == unit_id:
             return unit
     return None
 
 
-def first_unit_id() -> str:
-    return load_units()[0]["id"]
+def first_unit_id(copy_id: str = DEMO_COPY_ID) -> str:
+    return load_units(copy_id)[0]["id"]
 
 
-def next_unit_id(unit_id: str) -> str | None:
-    ids = [unit["id"] for unit in load_units()]
+def next_unit_id(copy_id: str, unit_id: str) -> str | None:
+    ids = [unit["id"] for unit in load_units(copy_id)]
     try:
         index = ids.index(unit_id)
     except ValueError:
@@ -57,8 +63,8 @@ def next_unit_id(unit_id: str) -> str | None:
     return ids[index + 1]
 
 
-def previous_unit_id(unit_id: str) -> str | None:
-    ids = [unit["id"] for unit in load_units()]
+def previous_unit_id(copy_id: str, unit_id: str) -> str | None:
+    ids = [unit["id"] for unit in load_units(copy_id)]
     try:
         index = ids.index(unit_id)
     except ValueError:
@@ -68,8 +74,8 @@ def previous_unit_id(unit_id: str) -> str | None:
     return ids[index - 1]
 
 
-def initial_mastery() -> dict[str, dict]:
-    units = load_units()
+def initial_mastery(copy_id: str = DEMO_COPY_ID) -> dict[str, dict]:
+    units = load_units(copy_id)
     mastery: dict[str, dict] = {}
     for i, unit in enumerate(units):
         mastery[unit["id"]] = {
@@ -81,8 +87,8 @@ def initial_mastery() -> dict[str, dict]:
     return mastery
 
 
-def get_chapter_outline(unit_id: str) -> dict:
-    unit = get_unit(unit_id)
+def get_chapter_outline(copy_id: str, unit_id: str) -> dict:
+    unit = get_unit(copy_id, unit_id)
     if unit is None:
         return {"error": f"Unknown unit {unit_id}"}
     paragraphs = unit["paragraphs"]
@@ -100,10 +106,10 @@ def get_chapter_outline(unit_id: str) -> dict:
     }
 
 
-def curriculum_toc(mastery: dict | None = None) -> list[dict]:
+def curriculum_toc(copy_id: str, mastery: dict | None = None) -> list[dict]:
     mastery = mastery or {}
     items = []
-    for unit in load_units():
+    for unit in load_units(copy_id):
         entry = mastery.get(unit["id"]) or {}
         items.append(
             {
@@ -119,16 +125,16 @@ def curriculum_toc(mastery: dict | None = None) -> list[dict]:
     return items
 
 
-@lru_cache(maxsize=1)
-def _load_vectors() -> tuple[np.ndarray, list[dict]]:
-    npy = CORPUS / "embeddings.npy"
-    meta = CORPUS / "chunk_meta.json"
-    if not npy.exists():
-        raise CorpusNotBuiltError(npy)
-    if not meta.exists():
-        raise CorpusNotBuiltError(meta)
-    matrix = np.load(npy)
-    chunks = json.loads(meta.read_text(encoding="utf-8"))
+@lru_cache(maxsize=16)
+def _load_vectors(copy_id: str) -> tuple[np.ndarray, list[dict]]:
+    npy_key = blob_store.copy_key(copy_id, "embeddings.npy")
+    meta_key = blob_store.copy_key(copy_id, "chunk_meta.json")
+    if not blob_store.exists(npy_key):
+        raise CorpusNotBuiltError(copy_id, npy_key)
+    if not blob_store.exists(meta_key):
+        raise CorpusNotBuiltError(copy_id, meta_key)
+    matrix = np.load(io.BytesIO(blob_store.get_bytes(npy_key)))
+    chunks = json.loads(blob_store.get_bytes(meta_key).decode("utf-8"))
     return matrix, chunks
 
 
@@ -143,8 +149,8 @@ def _embed_query(query: str) -> np.ndarray:
     return vector
 
 
-def search(query: str, unit_id: str | None = None, k: int = 5) -> list[dict]:
-    matrix, chunks = _load_vectors()
+def search(copy_id: str, query: str, unit_id: str | None = None, k: int = 5) -> list[dict]:
+    matrix, chunks = _load_vectors(copy_id)
     query_vec = _embed_query(query)
     scores = matrix @ query_vec
     if unit_id:
@@ -161,16 +167,7 @@ def search(query: str, unit_id: str | None = None, k: int = 5) -> list[dict]:
     return hits
 
 
-async def asearch(query: str, unit_id: str | None = None, k: int = 5) -> list[dict]:
+async def asearch(copy_id: str, query: str, unit_id: str | None = None, k: int = 5) -> list[dict]:
     import asyncio
 
-    return await asyncio.to_thread(search, query, unit_id, k)
-
-
-if __name__ == "__main__":
-    import sys
-
-    query = " ".join(sys.argv[1:]) or "pin factory"
-    for hit in search(query, k=5):
-        print(f"{hit['score']:.3f} {hit['book']} {hit['title']} [{hit['paragraph_id']}]")
-        print(f"  {hit['text'][:200]}")
+    return await asyncio.to_thread(search, copy_id, query, unit_id, k)

@@ -28,6 +28,7 @@ export function ChatPanel({
   onQuiz,
   onCite,
   onBegin,
+  beginLabel,
   citeIndex,
 }: {
   messages: Message[];
@@ -38,6 +39,7 @@ export function ChatPanel({
   onQuiz: (answers: { id: string; answer: string }[]) => void;
   onCite: (id: string) => void;
   onBegin?: () => void;
+  beginLabel?: string;
   citeIndex: CiteIndex;
 }) {
   const [draft, setDraft] = useState("");
@@ -82,8 +84,8 @@ export function ChatPanel({
             <div className="rounded-lg border border-[#d9c9ae] bg-[#efe4cc] px-4 py-5 font-[family-name:var(--font-serif)] text-[#4a4036]">
               <p className="text-[16px] text-[#1c1612]">A close-reading tutor, not a summary bot.</p>
               <p className="mt-2 text-[14px] leading-relaxed">
-                It will teach Smith’s argument, then test you in your own words. Weak points get
-                reteaching. The next chapter stays locked until this one is internalized.
+                It will teach this author’s argument, then test you in your own words. Weak points get
+                reteaching. The next unit stays locked until this one is internalized.
               </p>
               {onBegin && (
                 <button
@@ -91,7 +93,7 @@ export function ChatPanel({
                   onClick={onBegin}
                   className="mt-4 rounded-md bg-[#1c2d24] px-3 py-2 text-[13px] font-medium text-[#f3ead8]"
                 >
-                  Begin with the Introduction
+                  {beginLabel || "Begin"}
                 </button>
               )}
             </div>

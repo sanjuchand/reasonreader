@@ -18,13 +18,36 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const userThreads = pgTable("user_threads", {
-  userId: uuid("user_id")
-    .primaryKey()
-    .references(() => users.id, { onDelete: "cascade" }),
-  langgraphThreadId: text("langgraph_thread_id").notNull(),
+export const copies = pgTable("copies", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  kind: text("kind").notNull(),
+  ownerId: uuid("owner_id").references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default(""),
+  author: text("author").notNull().default(""),
+  status: text("status").notNull().default("uploading"),
+  flavor: text("flavor"),
+  sourceContentType: text("source_content_type"),
+  sourceFilename: text("source_filename"),
+  rightsAttestedAt: timestamp("rights_attested_at", { withTimezone: true }),
+  error: text("error"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const userThreads = pgTable(
+  "user_threads",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    copyId: uuid("copy_id")
+      .notNull()
+      .references(() => copies.id, { onDelete: "cascade" }),
+    langgraphThreadId: text("langgraph_thread_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.copyId] })],
+);
 
 export const unitProgress = pgTable(
   "unit_progress",
@@ -32,6 +55,9 @@ export const unitProgress = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    copyId: uuid("copy_id")
+      .notNull()
+      .references(() => copies.id, { onDelete: "cascade" }),
     unitId: text("unit_id").notNull(),
     status: text("status").notNull().default("locked"),
     score: doublePrecision("score").notNull().default(0),
@@ -39,5 +65,5 @@ export const unitProgress = pgTable(
     concepts: jsonb("concepts").notNull().default([]),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [primaryKey({ columns: [table.userId, table.unitId] })],
+  (table) => [primaryKey({ columns: [table.userId, table.copyId, table.unitId] })],
 );

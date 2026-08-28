@@ -16,8 +16,8 @@ const serif = Source_Serif_4({
 });
 
 export const metadata: Metadata = {
-  title: "Wealth of Nations tutor",
-  description: "Chapter-mastery tutor for Adam Smith’s Wealth of Nations",
+  title: "Ken",
+  description: "Bring a book you have the right to read. We tutor you through your copy.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

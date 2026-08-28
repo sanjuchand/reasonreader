@@ -1,0 +1,8 @@
+---
+description: Master Ken plans, canvases, and product rules in this repo’s .cursor/
+alwaysApply: true
+---
+
+# Workspace artifacts
+
+Project-specific plans, canvases, product decisions, and agent rules are mastered in this workspace’s `.cursor/` (`rules/`, `plans/`, `canvases/`). `~/.cursor/plans` and `~/.cursor/projects/...` are caches or render targets. After Plan UI or canvas render copies are created, copy the file here so git has the source of truth. Do not create the only copy of a Ken artifact under `~/.cursor`.

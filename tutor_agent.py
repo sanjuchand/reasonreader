@@ -20,6 +20,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from copy_store import get_copy
+from flavors import flavor_addendum
+from ingest.constants import DEMO_COPY_ID
 from progress_store import save_progress
 from corpus_store import (
     asearch,
@@ -28,6 +31,7 @@ from corpus_store import (
     get_chapter_outline,
     get_unit,
     initial_mastery,
+    load_book,
     next_unit_id,
 )
 
@@ -43,29 +47,28 @@ READY_RE = re.compile(
 )
 SHORT_READY_RE = re.compile(r"^(quiz|test|ready)(\s+me)?[.!]?\s*$", re.I)
 
-TEACH_PROMPT = """You are a demanding close-reading tutor of Adam Smith's An Inquiry into the Nature and Causes of the Wealth of Nations.
+TEACH_PROMPT = """You are a demanding close-reading tutor of the book named in the session briefing.
 
-Your job is that the student *internalize Smith's actual argument*, not a modern econ-101 slogan.
+Your job is that the student *internalize this author's actual argument*, not a slogan or a modern paraphrase.
 
 Rules:
 - Teach only the current unit. Do not skip ahead.
-- Cite with exactly one token per claim, like [@chap03:p2], using a paragraph_id from search_book or the outline. Never invent ids. Never write ranges such as [@chap01:p1-@chap01:p3]; emit separate tokens instead.
-- Quote Smith sparingly (a sentence or two), then make the student work: Socratic questions, distinctions, counterexamples Smith himself uses.
-- Nuances and later economists (Ricardo, Marx, modern textbooks) are allowed only as clearly labeled asides, never as if they were Smith.
+- Cite with exactly one token per claim, like [@u0003:p2], using a paragraph_id from search_book or the outline. Never invent ids. Never write ranges such as [@u0001:p1-@u0001:p3]; emit separate tokens instead.
+- Quote the author sparingly (a sentence or two), then make the student work: Socratic questions, distinctions, counterexamples the author uses.
 - If the student is wrong, say so plainly and point at the passage.
-- Do not flatten Book I into "free markets." Follow Smith's order: division of labour, extent of the market, money, real vs nominal price, natural vs market price, and so on.
-- When the student has engaged a claim, go deeper into Smith’s text — a distinction, a number, a counterexample in the chapter they have not yet touched. Do not call present_quiz just because they answered your last Socratic question.
+- When the student has engaged a claim, go deeper into this unit — a distinction, a number, a counterexample they have not yet touched. Do not call present_quiz just because they answered your last Socratic question.
 - Call present_quiz only if they explicitly ask to be tested (quiz me / test me / I am ready). Never re-ask, as a form, the same points they just stated in chat.
 - If the latest user message is a quiz submission and you are teaching a *new* unit, congratulate briefly, then start this unit. Do not re-score the quiz.
 - Never dump a whole chapter into the chat. Use get_chapter_outline and search_book.
+- Do not give exam answers the student can paste. Make them reconstruct the argument.
 """
 
 REVISE_PROMPT = """You are reteaching the weak concepts listed in the session briefing. The student just failed or only partly grasped them.
 
 Rules:
 - Do not re-lecture the whole unit. Only the weak concepts.
-- Cite with one [@chapter:pN] token per claim from search_book. Never invent ids or ranges.
-- Contrast what they said with what Smith actually wrote.
+- Cite with one [@u0000:p0] token per claim from search_book. Never invent ids or ranges.
+- Contrast what they said with what the author actually wrote.
 - Offer a different angle than the first teaching pass (a concrete example, a distinction, a failure case).
 - After the reteach, call present_quiz with 2–3 short-answer questions aimed *only* at those weak concepts. No multiple choice.
 - If the latest user message is a quiz submission, do not re-score it; that already happened. Start the reteach immediately.
@@ -84,6 +87,11 @@ class TutorState(AgentState):
     weak_concepts: NotRequired[Annotated[list, _lww]]
     last_judgment: NotRequired[Annotated[dict | None, _lww]]
     user_id: NotRequired[Annotated[str, _lww]]
+    copy_id: NotRequired[Annotated[str, _lww]]
+
+
+def copy_id_of(state: dict | None) -> str:
+    return (state or {}).get("copy_id") or DEMO_COPY_ID
 
 
 class QuizQuestion(BaseModel):
@@ -147,7 +155,7 @@ def is_context_summary(message: Any) -> bool:
     )
 
 
-PARA_ID_RE = re.compile(r"chap\d+(?:-p\d+)?:p\d+")
+PARA_ID_RE = re.compile(r"u\d+:p\d+")
 
 
 def normalize_citation_tokens(text: str) -> str:
@@ -211,21 +219,30 @@ def unit_label(unit: dict) -> str:
 
 
 def _briefing(state: dict) -> str:
-    unit_id = state.get("current_chapter_id") or first_unit_id()
-    unit = get_unit(unit_id) or {}
+    cid = copy_id_of(state)
+    unit_id = state.get("current_chapter_id") or first_unit_id(cid)
+    unit = get_unit(cid, unit_id) or {}
     mastery = state.get("mastery") or {}
-    unlocked = [item["id"] for item in curriculum_toc(mastery) if item.get("unlocked")]
+    unlocked = [item["id"] for item in curriculum_toc(cid, mastery) if item.get("unlocked")]
     weak = state.get("weak_concepts") or []
-    nxt = next_unit_id(unit_id)
-    nxt_unit = get_unit(nxt) if nxt else None
+    nxt = next_unit_id(cid, unit_id)
+    nxt_unit = get_unit(cid, nxt) if nxt else None
+    book = load_book(cid).get("book") or {}
+    copy = get_copy(cid) or {}
+    extra = flavor_addendum(copy.get("flavor"))
+    flavor_block = f"\n\nWork-specific notes:\n{extra}" if extra else ""
     return (
+        f"Work: {book.get('title') or copy.get('title') or 'this book'}"
+        f" — {book.get('author') or copy.get('author') or 'the author'}\n"
+        f"Copy id: {cid}\n"
         f"Current unit id: {unit_id}\n"
         f"Current unit: {unit_label(unit) if unit else unit_id}\n"
         f"Mode: {state.get('mode') or 'teach'}\n"
         f"Unlocked units: {', '.join(unlocked[:12])}{'…' if len(unlocked) > 12 else ''}\n"
         f"Next locked unit: {unit_label(nxt_unit) if nxt_unit and nxt not in unlocked else (nxt or 'none')}\n"
         f"Weak concepts to hit: {', '.join(weak) if weak else 'none'}\n"
-        "Citation format: one [@paragraph_id] token per claim, e.g. [@chap03:p2]. Never ranges."
+        "Citation format: one [@paragraph_id] token per claim, e.g. [@u0003:p2]. Never ranges."
+        f"{flavor_block}"
     )
 
 
@@ -243,9 +260,10 @@ async def inject_briefing(request: ModelRequest, handler) -> ModelResponse:
 
 
 @tool
-async def search_book(query: str, unit_id: str | None = None) -> list[dict]:
-    """Search Smith's text. Pass the current unit_id to stay inside this unit. Returns quotes plus paragraph_id for [@id] citations."""
-    hits = await asearch(query, unit_id=unit_id, k=5)
+async def search_book(query: str, unit_id: str | None = None, runtime: ToolRuntime = None) -> list[dict]:
+    """Search this copy's text. Pass the current unit_id to stay inside this unit. Returns quotes plus paragraph_id for [@id] citations."""
+    cid = copy_id_of(runtime.state if runtime is not None else None)
+    hits = await asearch(cid, query, unit_id=unit_id, k=5)
     return [
         {
             "paragraph_id": hit["paragraph_id"],
@@ -262,14 +280,16 @@ async def search_book(query: str, unit_id: str | None = None) -> list[dict]:
 @tool("get_chapter_outline")
 def get_chapter_outline_tool(unit_id: str | None = None, runtime: ToolRuntime = None) -> dict:
     """Return the argument skeleton of a unit: headings and opening sentences, not the full text."""
-    target = unit_id or (runtime.state.get("current_chapter_id") if runtime is not None else None) or first_unit_id()
-    return get_chapter_outline(target)
+    cid = copy_id_of(runtime.state if runtime is not None else None)
+    target = unit_id or (runtime.state.get("current_chapter_id") if runtime is not None else None) or first_unit_id(cid)
+    return get_chapter_outline(cid, target)
 
 
 @tool
 def list_curriculum(runtime: ToolRuntime) -> list[dict]:
     """Table of contents with lock/mastery status for each unit."""
-    return curriculum_toc(runtime.state.get("mastery") or {})
+    cid = copy_id_of(runtime.state)
+    return curriculum_toc(cid, runtime.state.get("mastery") or {})
 
 
 @tool
@@ -291,18 +311,28 @@ def present_quiz(questions: list[QuizQuestion], runtime: ToolRuntime) -> Command
 
 
 def prep(state: TutorState) -> dict:
-    mastery = state.get("mastery") or initial_mastery()
-    requested = state.get("current_chapter_id") or first_unit_id()
+    cid = copy_id_of(state)
+    try:
+        mastery = state.get("mastery") or initial_mastery(cid)
+    except Exception:
+        mastery = state.get("mastery") or {}
+    requested = state.get("current_chapter_id")
     text = last_human_text(state)
     nav = NAV_RE.match(text.lstrip()) if text else None
     if nav:
         requested = nav.group(1)
-    unit = get_unit(requested)
-    if unit is None or not (mastery.get(requested) or {}).get("unlocked"):
-        requested = state.get("current_chapter_id") or first_unit_id()
-        if not (mastery.get(requested) or {}).get("unlocked"):
-            requested = first_unit_id()
+    unit = None
+    try:
+        if requested:
+            unit = get_unit(cid, requested)
+        if unit is None or not (mastery.get(requested) or {}).get("unlocked"):
+            requested = state.get("current_chapter_id") or first_unit_id(cid)
+            if not (mastery.get(requested) or {}).get("unlocked"):
+                requested = first_unit_id(cid)
+    except Exception:
+        requested = requested or state.get("current_chapter_id")
     updates: dict[str, Any] = {
+        "copy_id": cid,
         "mastery": mastery,
         "current_chapter_id": requested,
         "mode": state.get("mode") or "teach",
@@ -345,8 +375,8 @@ def after_revise(state: TutorState) -> str:
     return "test"
 
 
-async def _passages_for(unit_id: str, query: str, k: int = 6) -> str:
-    hits = await asearch(query, unit_id=unit_id, k=k)
+async def _passages_for(copy_id: str, unit_id: str, query: str, k: int = 6) -> str:
+    hits = await asearch(copy_id, query, unit_id=unit_id, k=k)
     lines = []
     for hit in hits:
         lines.append(f"[{hit['paragraph_id']}] {hit['text'][:700]}")
@@ -354,12 +384,13 @@ async def _passages_for(unit_id: str, query: str, k: int = 6) -> str:
 
 
 async def test_node(state: TutorState) -> dict:
-    unit_id = state.get("current_chapter_id") or first_unit_id()
-    unit = get_unit(unit_id) or {}
+    cid = copy_id_of(state)
+    unit_id = state.get("current_chapter_id") or first_unit_id(cid)
+    unit = get_unit(cid, unit_id) or {}
     weak = state.get("weak_concepts") or []
-    outline = get_chapter_outline(unit_id)
+    outline = get_chapter_outline(cid, unit_id)
     query = "; ".join(weak) if weak else (unit.get("title") or "core argument")
-    passages = await _passages_for(unit_id, query)
+    passages = await _passages_for(cid, unit_id, query)
     focus = (
         f"Write questions ONLY on these weak concepts: {weak}"
         if weak
@@ -370,7 +401,7 @@ async def test_node(state: TutorState) -> dict:
         [
             SystemMessage(
                 content=(
-                    "You write short-answer tests on Adam Smith for a student who has just been taught this unit. "
+                    "You write short-answer tests on this unit for a student who has just been taught it. "
                     "No multiple choice. Questions must be answerable from the passages. "
                     f"{focus}"
                 )
@@ -426,8 +457,9 @@ def _format_judgment(judgment: Judgment, advancing: bool, next_label: str | None
 
 
 async def judge_node(state: TutorState) -> dict:
-    unit_id = state.get("current_chapter_id") or first_unit_id()
-    unit = get_unit(unit_id) or {}
+    cid = copy_id_of(state)
+    unit_id = state.get("current_chapter_id") or first_unit_id(cid)
+    unit = get_unit(cid, unit_id) or {}
     quiz = state.get("open_quiz") or {"questions": []}
     answers = parse_quiz_answers(last_human_text(state))
     questions = quiz.get("questions") or []
@@ -439,20 +471,20 @@ async def judge_node(state: TutorState) -> dict:
             answer = (match or {}).get("answer", "")
         paired.append({"question": question, "answer": answer})
     concepts = [q.get("concept") or q.get("prompt", "") for q in questions]
-    passages = await _passages_for(unit_id, " ".join(concepts) or unit.get("title", ""), k=8)
+    passages = await _passages_for(cid, unit_id, " ".join(concepts) or unit.get("title", ""), k=8)
     model = init_chat_model("gpt-4o")
     judgment = await model.with_structured_output(Judgment).ainvoke(
         [
             SystemMessage(
                 content=(
-                    "You are a close-reading tutor scoring a short-answer test on Adam Smith. "
-                    "Score each answer against the passages, not modern economics. "
+                    "You are a close-reading tutor scoring a short-answer test on this unit. "
+                    "Score each answer against the passages, not a modern textbook rewrite. "
                     "miss = wrong, empty, or 'I don't know'; partial = some of the idea, missing a mechanism "
-                    "Smith insists on; mastered = could teach it. "
+                    "the author insists on; mastered = could teach it. "
                     "overall is the mean of those scores (mastered=1, partial=0.5, miss=0). "
                     "Put the technical justification in each concept's evidence field — that is internal. "
                     "summary_for_student is the only text the student will read: 3–6 sentences in second person, "
-                    "spoken like a tutor across a table. Name what they got right, then what Smith still needs "
+                    "spoken like a tutor across a table. Name what they got right, then what the author still needs "
                     "them to see. Cite with [@paragraph_id] tokens. "
                     "If they wrote 'I don't know' or similar, treat it as honest and name the missing claim; "
                     "do not scold, do not call it a missed opportunity, do not quote their answer back. "
@@ -469,7 +501,7 @@ async def judge_node(state: TutorState) -> dict:
         ]
     )
 
-    mastery = dict(state.get("mastery") or initial_mastery())
+    mastery = dict(state.get("mastery") or initial_mastery(cid))
     entry = dict(mastery.get(unit_id) or {"unlocked": True})
     entry["score"] = judgment.overall
     entry["concepts"] = [c.model_dump() for c in judgment.concepts]
@@ -484,7 +516,7 @@ async def judge_node(state: TutorState) -> dict:
         entry["status"] = "mastered"
         next_mode = "teach"
         weak = []
-        nxt = next_unit_id(unit_id)
+        nxt = next_unit_id(cid, unit_id)
         if nxt:
             nxt_entry = dict(mastery.get(nxt) or {})
             nxt_entry["unlocked"] = True
@@ -492,10 +524,10 @@ async def judge_node(state: TutorState) -> dict:
                 nxt_entry["status"] = "in_progress"
             mastery[nxt] = nxt_entry
             new_current = nxt
-            nxt_unit = get_unit(nxt)
+            nxt_unit = get_unit(cid, nxt)
             next_label = unit_label(nxt_unit) if nxt_unit else nxt
     mastery[unit_id] = entry
-    save_progress(state.get("user_id"), mastery)
+    save_progress(state.get("user_id"), cid, mastery)
     return {
         "mastery": mastery,
         "mode": next_mode,
@@ -509,14 +541,14 @@ async def judge_node(state: TutorState) -> dict:
 
 retrieval_tools = [search_book, get_chapter_outline_tool, list_curriculum, present_quiz]
 
-TUTOR_SUMMARY_PROMPT = """You compress a close-reading tutoring session on Adam Smith's Wealth of Nations.
+TUTOR_SUMMARY_PROMPT = """You compress a close-reading tutoring session on the student's current book.
 
 Preserve the student's own examples, mistakes, and distinctions. Quote them. Do not recast the session as a quiz-submission workflow unless the latest student message is actually a quiz.
 
 Structure:
 
 ## CURRENT UNIT
-Which unit is being taught, and which of Smith's claims have already been covered.
+Which unit is being taught, and which of the author's claims have already been covered.
 
 ## STUDENT THINKING
 What the student has argued, analogized, or gotten wrong.

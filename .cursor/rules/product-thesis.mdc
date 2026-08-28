@@ -1,0 +1,32 @@
+---
+description: Locked product thesis — BYOB tutor of the user's copy, Smith is the public demo
+alwaysApply: true
+---
+
+# Product thesis
+
+This is the business:
+
+> Bring a book you have the right to read. We tutor you through your copy. We do not become the library.
+
+Wealth of Nations is the **public demo** so a visitor can try the loop without uploading. It is not the product. The product name is **Ken**.
+
+## We do
+
+- Ingest a copy the signed-in user has the right to read (private to that account).
+- Turn that copy into gated close-reading units; tutor from the page; test only when they ask; judge against the author's claims; cite into their reader.
+- Keep Smith as a zero-upload try path with the same loop.
+
+## We refuse
+
+- Hosting or sharing a book so others can read it here (no class library, no "upload once for the seminar").
+- Replacing the publisher's copy so students do not buy the book.
+- Homework-helper mode (give the answer, skip the argument).
+- Treating Smith-specific parsers or prompts as the long-term architecture. Generic ingest + "this author's argument" is the product; Smith is a fixture of the demo corpus.
+
+## Implications for code
+
+- Per-user corpora and progress, never a global catalog of uploaded files.
+- No share-the-file or share-the-full-text features. Progress reports must not attach the source.
+- Public demo corpus (Smith) is the only book everyone sees.
+- Tutor prompts must be parameterizable by work, not hard-coded to Adam Smith, except for demo flavor on that corpus.

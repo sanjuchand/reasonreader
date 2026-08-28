@@ -3,25 +3,25 @@ import { getSessionUser } from "@/lib/auth/current-user";
 import { langgraphUrl } from "@/lib/auth/config";
 import { ensureThread, userOwnsThread } from "@/lib/langgraph";
 import { replaceProgress } from "@/lib/progress";
+import { getAccessibleCopy } from "@/lib/copies";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
 export const maxDuration = 300;
 
-type Ctx = { params: Promise<{ path: string[] }> };
+type Ctx = { params: Promise<{ copyId: string; path: string[] }> };
 
 function threadIdFrom(path: string[]) {
   if (path[0] === "threads" && path[1] && path[1] !== "search") return path[1];
   return null;
 }
 
-async function persistMasteryFromBody(userId: string, body: unknown) {
+async function persistMasteryFromBody(userId: string, copyId: string, body: unknown) {
   if (!body || typeof body !== "object") return;
   const record = body as { values?: { mastery?: Record<string, never> }; mastery?: Record<string, never> };
   const mastery = record.values?.mastery || record.mastery;
   if (mastery && typeof mastery === "object") {
-    await replaceProgress(userId, mastery);
+    await replaceProgress(userId, copyId, mastery);
   }
 }
 
@@ -46,10 +46,15 @@ async function proxy(request: NextRequest, ctx: Ctx) {
   if (!user) {
     return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
   }
-  const { path } = await ctx.params;
+  const { copyId, path } = await ctx.params;
+  const copy = await getAccessibleCopy(user.id, copyId);
+  if (!copy) {
+    return NextResponse.json({ detail: "Not found" }, { status: 404 });
+  }
+
   const segments = path || [];
   const needsThread = segments[0] === "threads";
-  const owned = needsThread ? await ensureThread(user.id) : "";
+  const owned = needsThread ? await ensureThread(user.id, copyId) : "";
   const targetThread = threadIdFrom(segments);
   if (needsThread && targetThread && !userOwnsThread(owned, targetThread)) {
     return NextResponse.json({ detail: "Thread not found" }, { status: 404 });
@@ -74,9 +79,11 @@ async function proxy(request: NextRequest, ctx: Ctx) {
         const parsed = JSON.parse(raw) as { input?: Record<string, unknown>; values?: Record<string, unknown> };
         if (parsed.input && typeof parsed.input === "object") {
           parsed.input.user_id = user.id;
+          parsed.input.copy_id = copyId;
         }
         if (parsed.values && typeof parsed.values === "object") {
           parsed.values.user_id = user.id;
+          parsed.values.copy_id = copyId;
         }
         body = JSON.stringify(parsed);
       } catch {
@@ -105,7 +112,7 @@ async function proxy(request: NextRequest, ctx: Ctx) {
   const text = await response.text();
   if (response.ok && text) {
     try {
-      await persistMasteryFromBody(user.id, JSON.parse(text));
+      await persistMasteryFromBody(user.id, copyId, JSON.parse(text));
     } catch {
       /* ignore non-json */
     }

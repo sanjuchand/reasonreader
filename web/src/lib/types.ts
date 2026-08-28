@@ -77,4 +77,5 @@ export type TutorState = {
     summary_for_student: string;
     concepts: MasteryEntry["concepts"];
   } | null;
+  copy_id?: string;
 };

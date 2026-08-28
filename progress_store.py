@@ -1,4 +1,4 @@
-"""Persist per-user unit mastery in Postgres (same tables as the Next app)."""
+"""Persist per-user, per-copy unit mastery in Postgres."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def save_progress(user_id: str | None, mastery: dict[str, Any] | None) -> None:
-    if not user_id or not mastery:
+def save_progress(user_id: str | None, copy_id: str | None, mastery: dict[str, Any] | None) -> None:
+    if not user_id or not copy_id or not mastery:
         return
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -28,6 +28,7 @@ def save_progress(user_id: str | None, mastery: dict[str, Any] | None) -> None:
         rows.append(
             (
                 user_id,
+                copy_id,
                 unit_id,
                 entry.get("status") or ("in_progress" if entry.get("unlocked") else "locked"),
                 float(entry.get("score") or 0),
@@ -42,9 +43,9 @@ def save_progress(user_id: str | None, mastery: dict[str, Any] | None) -> None:
             cur.executemany(
                 """
                 INSERT INTO unit_progress
-                  (user_id, unit_id, status, score, unlocked, concepts, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb, now())
-                ON CONFLICT (user_id, unit_id) DO UPDATE SET
+                  (user_id, copy_id, unit_id, status, score, unlocked, concepts, updated_at)
+                VALUES (%s, %s::uuid, %s, %s, %s, %s, %s::jsonb, now())
+                ON CONFLICT (user_id, copy_id, unit_id) DO UPDATE SET
                   status = EXCLUDED.status,
                   score = EXCLUDED.score,
                   unlocked = EXCLUDED.unlocked,

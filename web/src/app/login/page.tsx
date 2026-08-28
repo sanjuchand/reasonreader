@@ -23,14 +23,14 @@ function LoginPanel() {
       <div className="w-full max-w-md rounded-lg border border-white/10 bg-[#17241d] px-8 py-10 text-[#efe6d4]">
         <div className="mb-6 flex items-center gap-2">
           <BookOpen className="size-5 text-[#c4a15a]" />
-          <span className="text-[15px] font-semibold tracking-wide">The Wealth of Nations</span>
+          <span className="text-[15px] font-semibold tracking-wide">Ken</span>
         </div>
-        <p className="text-[11px] tracking-[0.14em] text-[#c4a15a] uppercase">Chapter-mastery tutor</p>
+        <p className="text-[11px] tracking-[0.14em] text-[#c4a15a] uppercase">Close-reading tutor</p>
         <h1 className="mt-2 font-[family-name:var(--font-serif)] text-[28px] leading-tight">
-          Sign in to keep your place in Smith.
+          Bring a book you have the right to read.
         </h1>
         <p className="mt-3 text-[14px] leading-relaxed text-[#cbbda4]">
-          Progress is stored per Google account. Another reader on this machine will not overwrite yours.
+          We tutor you through your copy. Smith is the public demo — try the loop without uploading.
         </p>
         <div className="mt-8">
           {clientId ? (

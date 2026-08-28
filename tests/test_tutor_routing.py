@@ -22,7 +22,7 @@ def test_ready_for_test():
     assert is_ready_for_test("I think I'm ready. Quiz me.")
     assert is_ready_for_test("test me on this chapter")
     assert not is_ready_for_test("[[QUIZ_SUBMISSION]] {}")
-    assert not is_ready_for_test("[NAV] unit_id=chap03 hello")
+    assert not is_ready_for_test("[NAV] unit_id=u0003 hello")
     assert READY_RE.search("give me a quiz")
     assert is_ready_for_test("test")
     assert is_ready_for_test("quiz.")
@@ -49,8 +49,8 @@ def test_skip_quiz_returns_to_teach():
         "messages": [{"type": "human", "content": "[[SKIP_QUIZ]] already said this"}],
         "mode": "test",
         "open_quiz": {"questions": [{"id": "q1"}]},
-        "current_chapter_id": "chap03",
-        "mastery": {"chap03": {"unlocked": True}},
+        "current_chapter_id": "u0003",
+        "mastery": {"u0003": {"unlocked": True}},
     }
     from tutor_agent import prep
 
@@ -82,7 +82,7 @@ def test_format_judgment_is_spoken_not_a_rubric():
     judgment = Judgment(
         overall=0.5,
         summary_for_student=(
-            "You've got trade as the driver of division of labour [@chap04:p0], "
+            "You've got trade as the driver of division of labour [@u0004:p0], "
             "but Smith also says nobody planned it."
         ),
         concepts=[
@@ -107,7 +107,7 @@ def test_format_judgment_is_spoken_not_a_rubric():
     assert "don't know" not in text
     assert "natural specialization" in text
     assert "You've got trade" in text
-    assert "[@chap04:p0]" in text
+    assert "[@u0004:p0]" in text
 
 
 def test_should_advance_when_mastered():
@@ -137,9 +137,9 @@ def test_last_human_skips_summarizer_injection():
 
 
 def test_normalize_citation_tokens():
-    assert normalize_citation_tokens("see [chap01:p0]") == "see [@chap01:p0]"
+    assert normalize_citation_tokens("see [u0000:p0]") == "see [@u0000:p0]"
     assert (
-        normalize_citation_tokens("range [@chap01:p1-@chap01:p3]")
-        == "range [@chap01:p1] [@chap01:p3]"
+        normalize_citation_tokens("range [@u0000:p1-@u0000:p3]")
+        == "range [@u0000:p1] [@u0000:p3]"
     )
-    assert normalize_citation_tokens("already [@chap03:p0]") == "already [@chap03:p0]"
+    assert normalize_citation_tokens("already [@u0003:p0]") == "already [@u0003:p0]"
