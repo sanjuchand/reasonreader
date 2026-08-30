@@ -8,6 +8,9 @@ set -a
 source .env
 set +a
 
+if [[ -f "${HOME}/.ssh/reasonreader_deploy" ]]; then
+  export GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/reasonreader_deploy -o IdentitiesOnly=yes"
+fi
 git fetch origin
 git reset --hard origin/main
 
