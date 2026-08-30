@@ -18,5 +18,9 @@ def test_deploy_waits_for_green_ci_on_main():
     assert "workflows: [CI]" in DEPLOY
     assert "conclusion == 'success'" in DEPLOY
     assert "./scripts/deploy.sh" in DEPLOY
-    assert "self-hosted" in DEPLOY
-    assert "reasonreader" in DEPLOY
+    assert "tailscale/github-action@v4" in DEPLOY
+    assert "TS_OAUTH_CLIENT_ID" in DEPLOY
+    assert "VPS_SSH_KEY" in DEPLOY
+    assert "VPS_HOST" in DEPLOY
+    assert "tag:ci" in DEPLOY
+
