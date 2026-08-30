@@ -10,21 +10,37 @@ jobs:
   deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
     steps:
-      - name: Tailscale
+      - name: Join the tailnet
         uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
+          ping: ${{ secrets.VPS_HOST }}
+
+      - name: Authorize SSH to the VPS
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" >~/.ssh/id_deploy
+          chmod 0600 ~/.ssh/id_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" >~/.ssh/known_hosts
+          chmod 0644 ~/.ssh/known_hosts
+
       - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: sanju
-          key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 20m
-          script: |
-            set -euo pipefail
-            cd /srv/reasonreader/prod
-            ./scripts/deploy.sh
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            "$VPS_USER@$VPS_HOST" \
+            'cd /srv/reasonreader/prod && ./scripts/deploy.sh'
