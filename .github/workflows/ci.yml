@@ -16,6 +16,8 @@ jobs:
           python-version: "3.12"
       - run: uv sync --group dev
       - run: uv run pytest
+        env:
+          OPENAI_API_KEY: ci-not-a-real-key
 
   vitest:
     runs-on: ubuntu-latest

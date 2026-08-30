@@ -7,6 +7,7 @@ DEPLOY = (ROOT / ".github/workflows/deploy.yml").read_text()
 
 def test_ci_runs_pytest_and_vitest():
     assert "uv run pytest" in CI
+    assert "OPENAI_API_KEY: ci-not-a-real-key" in CI
     assert "pnpm test" in CI
     assert "pull_request" in CI
     assert "branches: [main]" in CI
