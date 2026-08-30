@@ -6,19 +6,15 @@ on:
     types: [completed]
     branches: [main]
 
+# Public :22 is firewalled; this box reaches the VPS over Tailscale.
+# A self-hosted runner on emailvps pulls deploy.sh after CI is green.
 jobs:
   deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, reasonreader]
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: sanju
-          key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 20m
-          script: |
-            set -euo pipefail
-            cd /srv/reasonreader/prod
-            ./scripts/deploy.sh
+      - name: Deploy
+        run: |
+          set -euo pipefail
+          cd /srv/reasonreader/prod
+          ./scripts/deploy.sh
