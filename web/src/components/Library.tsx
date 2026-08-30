@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, LogOut, Upload } from "lucide-react";
+import { BookOpen, LogIn, LogOut, Upload } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import { DEMO_COPY_ID } from "@/lib/constants";
 
@@ -24,11 +24,7 @@ export function Library() {
   const [attested, setAttested] = useState(false);
 
   useEffect(() => {
-    if (!loading && !user) router.replace("/login");
-  }, [loading, user, router]);
-
-  useEffect(() => {
-    if (!user) return;
+    if (loading) return;
     void fetch("/api/copies")
       .then(async (res) => {
         const data = await res.json();
@@ -36,7 +32,7 @@ export function Library() {
         setCopies(data.copies || []);
       })
       .catch((err: Error) => setError(err.message));
-  }, [user]);
+  }, [loading]);
 
   async function onUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -74,7 +70,7 @@ export function Library() {
     }
   }
 
-  if (loading || !user) {
+  if (loading) {
     return <div className="h-screen bg-[#1c2d24]" />;
   }
 
@@ -98,14 +94,25 @@ export function Library() {
             <div className="text-[12px] text-[#cbbda4]">Your copy. Your tutor. Not a library.</div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => logout().then(() => router.replace("/login"))}
-          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-[#cbbda4] hover:bg-white/10 hover:text-white"
-        >
-          <LogOut className="size-3.5" />
-          Sign out
-        </button>
+        {user ? (
+          <button
+            type="button"
+            onClick={() => logout().then(() => router.replace("/"))}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-[#cbbda4] hover:bg-white/10 hover:text-white"
+          >
+            <LogOut className="size-3.5" />
+            Sign out
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => router.push("/login?next=/")}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-[#cbbda4] hover:bg-white/10 hover:text-white"
+          >
+            <LogIn className="size-3.5" />
+            Sign in
+          </button>
+        )}
       </header>
 
       <main className="mx-auto mt-10 max-w-3xl">
@@ -114,7 +121,9 @@ export function Library() {
           We tutor you through your copy.
         </h1>
         <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-[#cbbda4]">
-          Smith is here so you can try the loop without uploading. Your files stay private to this account.
+          {user
+            ? "Smith is here so you can try the loop without uploading. Your files stay private to this account."
+            : "Smith is here so you can try the loop without uploading. Sign in only if you want to save progress or bring your own copy."}
         </p>
 
         <button
@@ -127,6 +136,7 @@ export function Library() {
           <div className="text-[13px] text-[#cbbda4]">{demo.author || "Adam Smith"} · no upload</div>
         </button>
 
+        {user ? (
         <form onSubmit={(event) => void onUpload(event)} className="mt-8 rounded-lg border border-white/10 bg-[#17241d] px-5 py-5">
           <div className="flex items-center gap-2 text-[15px] font-medium">
             <Upload className="size-4 text-[#c4a15a]" />
@@ -157,6 +167,24 @@ export function Library() {
             {busy ? "Ingesting…" : "Tutor this copy"}
           </button>
         </form>
+        ) : (
+          <div className="mt-8 rounded-lg border border-white/10 bg-[#17241d] px-5 py-5">
+            <div className="flex items-center gap-2 text-[15px] font-medium">
+              <Upload className="size-4 text-[#c4a15a]" />
+              Bring your copy
+            </div>
+            <p className="mt-2 text-[13px] text-[#cbbda4]">
+              Sign in to upload a PDF or EPUB you have the right to read. The public demo does not need an account.
+            </p>
+            <button
+              type="button"
+              onClick={() => router.push("/login?next=/")}
+              className="mt-4 rounded-md bg-[#c4a15a] px-4 py-2 text-[13px] font-medium text-[#1c2d24]"
+            >
+              Sign in to bring a copy
+            </button>
+          </div>
+        )}
 
         {mine.length > 0 && (
           <div className="mt-10">

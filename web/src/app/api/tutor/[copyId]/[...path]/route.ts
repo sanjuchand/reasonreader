@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/current-user";
 import { langgraphUrl } from "@/lib/auth/config";
-import { ensureThread, userOwnsThread } from "@/lib/langgraph";
+import { createGuestThread, ensureThread, isAnonymousThread, userOwnsThread } from "@/lib/langgraph";
 import { replaceProgress } from "@/lib/progress";
 import { getAccessibleCopy } from "@/lib/copies";
 
@@ -43,27 +43,36 @@ export async function DELETE(request: NextRequest, ctx: Ctx) {
 
 async function proxy(request: NextRequest, ctx: Ctx) {
   const user = await getSessionUser();
-  if (!user) {
-    return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
-  }
   const { copyId, path } = await ctx.params;
-  const copy = await getAccessibleCopy(user.id, copyId);
+  const copy = await getAccessibleCopy(user?.id ?? null, copyId);
   if (!copy) {
     return NextResponse.json({ detail: "Not found" }, { status: 404 });
+  }
+  if (copy.kind !== "demo" && !user) {
+    return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
   }
 
   const segments = path || [];
   const needsThread = segments[0] === "threads";
   let owned = "";
   try {
-    owned = needsThread ? await ensureThread(user.id, copyId) : "";
+    if (needsThread && user) {
+      owned = await ensureThread(user.id, copyId);
+    } else if (needsThread && request.method === "POST" && segments.length === 1) {
+      owned = await createGuestThread(copyId);
+    }
   } catch (err) {
     const detail = err instanceof Error ? err.message : "Failed to open tutor thread";
     return NextResponse.json({ detail }, { status: 500 });
   }
   const targetThread = threadIdFrom(segments);
-  if (needsThread && targetThread && !userOwnsThread(owned, targetThread)) {
-    return NextResponse.json({ detail: "Thread not found" }, { status: 404 });
+  if (needsThread && targetThread) {
+    if (user && !userOwnsThread(owned, targetThread)) {
+      return NextResponse.json({ detail: "Thread not found" }, { status: 404 });
+    }
+    if (!user && !(await isAnonymousThread(targetThread))) {
+      return NextResponse.json({ detail: "Thread not found" }, { status: 404 });
+    }
   }
 
   if (request.method === "POST" && segments.length === 1 && segments[0] === "threads") {
@@ -84,11 +93,11 @@ async function proxy(request: NextRequest, ctx: Ctx) {
       try {
         const parsed = JSON.parse(raw) as { input?: Record<string, unknown>; values?: Record<string, unknown> };
         if (parsed.input && typeof parsed.input === "object") {
-          parsed.input.user_id = user.id;
+          parsed.input.user_id = user?.id ?? null;
           parsed.input.copy_id = copyId;
         }
         if (parsed.values && typeof parsed.values === "object") {
-          parsed.values.user_id = user.id;
+          parsed.values.user_id = user?.id ?? null;
           parsed.values.copy_id = copyId;
         }
         body = JSON.stringify(parsed);
@@ -118,7 +127,7 @@ async function proxy(request: NextRequest, ctx: Ctx) {
   const text = await response.text();
   if (response.ok && text) {
     try {
-      await persistMasteryFromBody(user.id, copyId, JSON.parse(text));
+      if (user) await persistMasteryFromBody(user.id, copyId, JSON.parse(text));
     } catch {
       /* ignore non-json */
     }

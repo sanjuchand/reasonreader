@@ -1,20 +1,23 @@
 "use client";
 
 import { GoogleLogin, GoogleOAuthProvider } from "@react-oauth/google";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BookOpen } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
+import { safeNextPath } from "@/lib/copies-access";
 
 const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 
 function LoginPanel() {
   const { user, loading, setUser } = useAuth();
   const router = useRouter();
+  const search = useSearchParams();
+  const next = safeNextPath(search.get("next"));
   const [error, setError] = useState("");
 
   if (!loading && user) {
-    router.replace("/");
+    router.replace(next);
     return <div className="h-screen bg-[#1c2d24]" />;
   }
 
@@ -27,10 +30,10 @@ function LoginPanel() {
         </div>
         <p className="text-[11px] tracking-[0.14em] text-[#c4a15a] uppercase">Close-reading tutor</p>
         <h1 className="mt-2 font-[family-name:var(--font-serif)] text-[28px] leading-tight">
-          Bring a book you have the right to read.
+          Sign in to save progress.
         </h1>
         <p className="mt-3 text-[14px] leading-relaxed text-[#cbbda4]">
-          We tutor you through your copy. Smith is the public demo — try the loop without uploading.
+          You can read Smith and try the tutor without an account. Sign in to keep progress or bring a copy you have the right to read.
         </p>
         <div className="mt-8">
           {clientId ? (
@@ -46,7 +49,7 @@ function LoginPanel() {
                   const data = await response.json();
                   if (!response.ok) throw new Error(data.detail || "Sign-in failed");
                   setUser(data);
-                  router.replace("/");
+                  router.replace(next);
                 } catch (err) {
                   setError(err instanceof Error ? err.message : "Sign-in failed");
                 }
@@ -58,6 +61,13 @@ function LoginPanel() {
             <p className="text-[13px] text-[#e2b1a0]">Set NEXT_PUBLIC_GOOGLE_CLIENT_ID to enable Google sign-in.</p>
           )}
         </div>
+        <button
+          type="button"
+          onClick={() => router.push("/")}
+          className="mt-6 text-[13px] text-[#cbbda4] underline-offset-2 hover:text-white hover:underline"
+        >
+          Read Smith without signing in
+        </button>
         {error ? <p className="mt-4 text-[13px] text-[#e2b1a0]">{error}</p> : null}
       </div>
     </div>
@@ -67,7 +77,9 @@ function LoginPanel() {
 export default function LoginPage() {
   return (
     <GoogleOAuthProvider clientId={clientId}>
-      <LoginPanel />
+      <Suspense fallback={<div className="h-screen bg-[#1c2d24]" />}>
+        <LoginPanel />
+      </Suspense>
     </GoogleOAuthProvider>
   );
 }

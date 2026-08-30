@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStream } from "@langchain/langgraph-sdk/react";
-import { BookOpen, LogOut, RotateCcw, Library } from "lucide-react";
+import { BookOpen, LogIn, LogOut, RotateCcw, Library } from "lucide-react";
 import { ChatPanel } from "@/components/ChatPanel";
 import { Reader } from "@/components/Reader";
 import { Toc } from "@/components/Toc";
@@ -41,13 +41,8 @@ function unitLabel(unit: Unit) {
 
 export function Studio({ copyId }: { copyId: string }) {
   const { user, loading: authLoading } = useAuth();
-  const router = useRouter();
 
-  useEffect(() => {
-    if (!authLoading && !user) router.replace("/login");
-  }, [authLoading, user, router]);
-
-  if (authLoading || !user) {
+  if (authLoading) {
     return <div className="h-screen bg-[#1c2d24]" />;
   }
   return <StudioApp user={user} copyId={copyId} />;
@@ -57,7 +52,7 @@ function StudioApp({
   user,
   copyId,
 }: {
-  user: NonNullable<ReturnType<typeof useAuth>["user"]>;
+  user: ReturnType<typeof useAuth>["user"];
   copyId: string;
 }) {
   const { logout } = useAuth();
@@ -117,7 +112,8 @@ function StudioApp({
     return progress?.mastery ?? {};
   }, [values.mastery, progress]);
   const firstId = units[0]?.id;
-  const activeId = pinnedId ?? values.current_chapter_id ?? progress?.currentUnitId ?? firstId;
+  const beginId = progress?.currentUnitId ?? firstId;
+  const activeId = pinnedId ?? values.current_chapter_id ?? beginId;
   const nextUnit = useMemo(() => {
     const index = units.findIndex((unit) => unit.id === activeId);
     return index >= 0 ? units[index + 1] : undefined;
@@ -143,12 +139,13 @@ function StudioApp({
     const encoded = JSON.stringify(values.mastery);
     if (encoded === lastSyncedMastery.current) return;
     lastSyncedMastery.current = encoded;
+    if (!user) return;
     void fetch(progressUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mastery: values.mastery }),
     }).then(() => refreshProgress());
-  }, [values.mastery, refreshProgress, progressUrl]);
+  }, [user, values.mastery, refreshProgress, progressUrl]);
 
   const submitText = useCallback(
     (text: string, extra?: Partial<TutorState>) => {
@@ -180,13 +177,17 @@ function StudioApp({
 
   const reset = async () => {
     if (!window.confirm("Reset your progress on this copy?")) return;
-    const res = await fetch(progressUrl, { method: "DELETE" });
-    const data = await res.json().catch(() => ({}));
+    if (user) {
+      const res = await fetch(progressUrl, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (data.threadId) setThreadId(data.threadId);
+      await refreshProgress();
+    }
     setPinnedId(null);
-    if (data.threadId) setThreadId(data.threadId);
-    await refreshProgress();
     window.location.reload();
   };
+
+  const signInHref = `/login?next=${encodeURIComponent(`/read/${copyId}`)}`;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-[#1c2d24] font-[family-name:var(--font-sans)]">
@@ -205,9 +206,11 @@ function StudioApp({
         </div>
         <div className="flex items-center gap-3 text-[12px]">
           {connected === false && <span className="text-[#e2b1a0]">Graph not reachable</span>}
-          <span className="max-w-[140px] truncate text-[#cbbda4]" title={user.email}>
-            {user.name || user.email}
-          </span>
+          {user ? (
+            <span className="max-w-[140px] truncate text-[#cbbda4]" title={user.email}>
+              {user.name || user.email}
+            </span>
+          ) : null}
           <button
             type="button"
             onClick={() => router.push("/")}
@@ -224,16 +227,40 @@ function StudioApp({
             <RotateCcw className="size-3.5" />
             Reset
           </button>
-          <button
-            type="button"
-            onClick={() => logout().then(() => router.replace("/login"))}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[#cbbda4] hover:bg-white/10 hover:text-white"
-          >
-            <LogOut className="size-3.5" />
-            Sign out
-          </button>
+          {user ? (
+            <button
+              type="button"
+              onClick={() => logout().then(() => router.replace("/"))}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[#cbbda4] hover:bg-white/10 hover:text-white"
+            >
+              <LogOut className="size-3.5" />
+              Sign out
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => router.push(signInHref)}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[#cbbda4] hover:bg-white/10 hover:text-white"
+            >
+              <LogIn className="size-3.5" />
+              Sign in
+            </button>
+          )}
         </div>
       </header>
+
+      {!user && (
+        <div className="flex items-center justify-between gap-3 border-b border-[#c4a15a]/30 bg-[#2a3d32] px-4 py-2 text-[13px] text-[#efe6d4]">
+          <span>You can read and tutor without an account. Sign in to save progress across visits.</span>
+          <button
+            type="button"
+            onClick={() => router.push(signInHref)}
+            className="shrink-0 rounded-md bg-[#c4a15a] px-3 py-1 text-[12px] font-medium text-[#1c2d24]"
+          >
+            Sign in to save progress
+          </button>
+        </div>
+      )}
 
       {corpusError && (
         <div className="bg-[#8a2f2f] px-4 py-2 text-[13px] text-white">{corpusError}</div>
@@ -269,7 +296,7 @@ function StudioApp({
             error={errorText(stream.error)}
             onCite={setHighlightId}
             citeIndex={citeIndex}
-            onBegin={firstId ? () => openUnit(firstId) : undefined}
+            onBegin={beginId ? () => openUnit(beginId) : undefined}
             beginLabel="Begin"
             onBeginNext={canBeginNext && nextUnit ? () => openUnit(nextUnit.id) : undefined}
             beginNextLabel={nextUnit ? `Begin next · ${nextUnit.book}` : undefined}

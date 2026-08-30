@@ -1,16 +1,19 @@
 import { and, eq, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { copies } from "@/lib/db/schema";
+import { canReadCopy } from "@/lib/copies-access";
 
 export type CopyRow = typeof copies.$inferSelect;
 
-export async function getAccessibleCopy(userId: string, copyId: string): Promise<CopyRow | null> {
+export async function getAccessibleCopy(userId: string | null, copyId: string): Promise<CopyRow | null> {
   const rows = await db.select().from(copies).where(eq(copies.id, copyId)).limit(1);
   const copy = rows[0];
   if (!copy) return null;
-  if (copy.kind === "demo") return copy;
-  if (copy.ownerId === userId) return copy;
-  return null;
+  return canReadCopy(copy, userId) ? copy : null;
+}
+
+export async function listDemoCopies(): Promise<CopyRow[]> {
+  return db.select().from(copies).where(eq(copies.kind, "demo")).orderBy(copies.createdAt);
 }
 
 export async function listVisibleCopies(userId: string): Promise<CopyRow[]> {

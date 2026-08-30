@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { getSessionUser } from "@/lib/auth/current-user";
-import { listVisibleCopies, publicCopy } from "@/lib/copies";
+import { listDemoCopies, listVisibleCopies, publicCopy } from "@/lib/copies";
 import { db } from "@/lib/db";
 import { copies } from "@/lib/db/schema";
 import { copyKey, putBytes } from "@/lib/s3";
@@ -14,8 +14,7 @@ export const maxDuration = 300;
 
 export async function GET() {
   const user = await getSessionUser();
-  if (!user) return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
-  const rows = await listVisibleCopies(user.id);
+  const rows = user ? await listVisibleCopies(user.id) : await listDemoCopies();
   return NextResponse.json({ copies: rows.map(publicCopy) });
 }
 

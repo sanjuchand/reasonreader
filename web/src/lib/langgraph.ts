@@ -26,14 +26,7 @@ function currentChapter(mastery: Record<string, { status?: string; unlocked?: bo
   return unlocked.at(-1)?.[0] || firstId;
 }
 
-export async function ensureThread(userId: string, copyId: string): Promise<string> {
-  const existing = await db
-    .select()
-    .from(userThreads)
-    .where(and(eq(userThreads.userId, userId), eq(userThreads.copyId, copyId)))
-    .limit(1);
-  if (existing[0]) return existing[0].langgraphThreadId;
-
+async function createThreadWithState(copyId: string, userId: string | null, mastery: Record<string, { status?: string; unlocked?: boolean; score?: number }>) {
   const created = await langgraph("/threads", {
     method: "POST",
     body: JSON.stringify({ metadata: { graph_id: assistantId() } }),
@@ -42,7 +35,6 @@ export async function ensureThread(userId: string, copyId: string): Promise<stri
   const threadId = payload.thread_id;
   const corpus = await loadCorpus(copyId);
   const first = firstUnitId(corpus.units) || "u0000";
-  const mastery = await loadMasteryMap(userId, copyId);
   if (!mastery[first]) {
     mastery[first] = { unlocked: true, status: "in_progress", score: 0 };
   }
@@ -58,6 +50,23 @@ export async function ensureThread(userId: string, copyId: string): Promise<stri
       },
     }),
   });
+  return threadId;
+}
+
+export async function createGuestThread(copyId: string): Promise<string> {
+  return createThreadWithState(copyId, null, {});
+}
+
+export async function ensureThread(userId: string, copyId: string): Promise<string> {
+  const existing = await db
+    .select()
+    .from(userThreads)
+    .where(and(eq(userThreads.userId, userId), eq(userThreads.copyId, copyId)))
+    .limit(1);
+  if (existing[0]) return existing[0].langgraphThreadId;
+
+  const mastery = await loadMasteryMap(userId, copyId);
+  const threadId = await createThreadWithState(copyId, userId, mastery);
   await db.insert(userThreads).values({ userId, copyId, langgraphThreadId: threadId });
   return threadId;
 }
@@ -71,4 +80,14 @@ export async function replaceThread(userId: string, copyId: string): Promise<str
 
 export function userOwnsThread(userThreadId: string, requestedId: string) {
   return userThreadId === requestedId;
+}
+
+export async function isAnonymousThread(threadId: string): Promise<boolean> {
+  try {
+    const response = await langgraph(`/threads/${threadId}/state`);
+    const payload = (await response.json()) as { values?: { user_id?: string | null } };
+    return !payload.values?.user_id;
+  } catch {
+    return false;
+  }
 }

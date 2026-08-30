@@ -9,9 +9,8 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, ctx: Ctx) {
   const user = await getSessionUser();
-  if (!user) return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
   const { id } = await ctx.params;
-  const copy = await getAccessibleCopy(user.id, id);
+  const copy = await getAccessibleCopy(user?.id ?? null, id);
   if (!copy) return NextResponse.json({ detail: "Not found" }, { status: 404 });
   if (copy.status !== "ready") {
     return NextResponse.json({ error: "Copy is not ready", status: copy.status }, { status: 409 });
