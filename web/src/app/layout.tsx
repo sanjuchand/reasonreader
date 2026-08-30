@@ -17,7 +17,7 @@ const serif = Source_Serif_4({
 
 export const metadata: Metadata = {
   title: "Ken",
-  description: "Bring a book you have the right to read. We tutor you through your copy.",
+  description: "Summarization is the wrong shape for learning. Ken teaches one unit at a time, in your own words.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

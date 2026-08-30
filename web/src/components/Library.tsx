@@ -15,6 +15,8 @@ type CopyCard = {
   error: string | null;
 };
 
+const DEMO_UNIT_COUNT = 132;
+
 export function Library() {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
@@ -83,16 +85,14 @@ export function Library() {
     error: null,
   };
   const mine = copies.filter((c) => c.kind === "private");
+  const demoHref = `/read/${demo.id}`;
 
   return (
-    <div className="min-h-screen bg-[#1c2d24] px-6 py-8 font-[family-name:var(--font-sans)] text-[#efe6d4]">
-      <header className="mx-auto flex max-w-3xl items-center justify-between">
+    <div className="min-h-screen bg-[#1c2d24] font-[family-name:var(--font-sans)] text-[#efe6d4]">
+      <header className="mx-auto flex max-w-3xl items-center justify-between px-6 py-6">
         <div className="flex items-center gap-2">
           <BookOpen className="size-5 text-[#c4a15a]" />
-          <div>
-            <div className="text-[15px] font-semibold tracking-wide">Ken</div>
-            <div className="text-[12px] text-[#cbbda4]">Your copy. Your tutor. Not a library.</div>
-          </div>
+          <div className="text-[15px] font-semibold tracking-wide">Ken</div>
         </div>
         {user ? (
           <button
@@ -115,76 +115,119 @@ export function Library() {
         )}
       </header>
 
-      <main className="mx-auto mt-10 max-w-3xl">
-        <p className="text-[13px] tracking-[0.12em] text-[#c4a15a] uppercase">Bring a book you have the right to read</p>
-        <h1 className="mt-2 font-[family-name:var(--font-serif)] text-[32px] leading-tight">
-          We tutor you through your copy.
+      <section className="mx-auto max-w-3xl px-6 pb-16 pt-6 sm:pt-14">
+        <p className="text-[13px] tracking-[0.18em] text-[#c4a15a] uppercase">Ken</p>
+        <h1 className="mt-4 max-w-2xl font-[family-name:var(--font-serif)] text-[34px] leading-[1.15] sm:text-[46px]">
+          Summarization is the wrong shape for learning.
         </h1>
-        <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-[#cbbda4]">
-          {user
-            ? "Smith is here so you can try the loop without uploading. Your files stay private to this account."
-            : "Smith is here so you can try the loop without uploading. Sign in only if you want to save progress or bring your own copy."}
-        </p>
-
-        <button
-          type="button"
-          onClick={() => router.push(`/read/${demo.id}`)}
-          className="mt-8 w-full rounded-lg border border-white/10 bg-[#17241d] px-5 py-4 text-left hover:border-[#c4a15a]/50"
-        >
-          <div className="text-[11px] uppercase tracking-wide text-[#c4a15a]">Public demo</div>
-          <div className="mt-1 text-[17px] font-medium">{demo.title || "The Wealth of Nations"}</div>
-          <div className="text-[13px] text-[#cbbda4]">{demo.author || "Adam Smith"} · no upload</div>
-        </button>
-
-        {user ? (
-        <form onSubmit={(event) => void onUpload(event)} className="mt-8 rounded-lg border border-white/10 bg-[#17241d] px-5 py-5">
-          <div className="flex items-center gap-2 text-[15px] font-medium">
-            <Upload className="size-4 text-[#c4a15a]" />
-            Bring your copy
-          </div>
-          <p className="mt-2 text-[13px] text-[#cbbda4]">PDF or EPUB. Digital text only — scanned pages are not supported yet.</p>
-          <input
-            name="file"
-            type="file"
-            accept=".pdf,.epub,application/pdf,application/epub+zip"
-            required
-            className="mt-4 block w-full text-[13px] file:mr-3 file:rounded-md file:border-0 file:bg-[#c4a15a] file:px-3 file:py-1.5 file:text-[12px] file:font-medium file:text-[#1c2d24]"
-          />
-          <label className="mt-4 flex items-start gap-2 text-[13px] leading-relaxed text-[#cbbda4]">
-            <input
-              type="checkbox"
-              checked={attested}
-              onChange={(event) => setAttested(event.target.checked)}
-              className="mt-1"
-            />
-            I have the right to read this copy. Ken will not share it or become a library for others.
-          </label>
+        <div className="mt-6 max-w-xl space-y-4 text-[16px] leading-relaxed text-[#cbbda4]">
+          <p>
+            Ask an AI about a book and it gives you a competent summary. You feel like you understood it. A week later,
+            you cannot reconstruct the argument.
+          </p>
+          <p>
+            Ken does the opposite: it teaches one unit at a time, tests you in your own words, and keeps the next unit
+            locked until this one is internalized.
+          </p>
+        </div>
+        <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
-            type="submit"
-            disabled={busy || !attested}
-            className="mt-4 rounded-md bg-[#c4a15a] px-4 py-2 text-[13px] font-medium text-[#1c2d24] disabled:opacity-40"
+            type="button"
+            onClick={() => router.push(demoHref)}
+            className="rounded-md bg-[#c4a15a] px-5 py-2.5 text-[14px] font-medium text-[#1c2d24] hover:bg-[#d4b36c]"
           >
-            {busy ? "Ingesting…" : "Tutor this copy"}
+            Try the Adam Smith demo
           </button>
-        </form>
-        ) : (
-          <div className="mt-8 rounded-lg border border-white/10 bg-[#17241d] px-5 py-5">
-            <div className="flex items-center gap-2 text-[15px] font-medium">
-              <Upload className="size-4 text-[#c4a15a]" />
-              Bring your copy
-            </div>
-            <p className="mt-2 text-[13px] text-[#cbbda4]">
-              Sign in to upload a PDF or EPUB you have the right to read. The public demo does not need an account.
-            </p>
+          {user ? (
+            <a
+              href="#bring-your-copy"
+              className="rounded-md border border-white/15 px-5 py-2.5 text-center text-[14px] text-[#efe6d4] hover:border-[#c4a15a]/50"
+            >
+              Bring your own book
+            </a>
+          ) : (
             <button
               type="button"
-              onClick={() => router.push("/login?next=/")}
-              className="mt-4 rounded-md bg-[#c4a15a] px-4 py-2 text-[13px] font-medium text-[#1c2d24]"
+              onClick={() => router.push("/login?next=/#bring-your-copy")}
+              className="rounded-md border border-white/15 px-5 py-2.5 text-[14px] text-[#efe6d4] hover:border-[#c4a15a]/50"
             >
-              Sign in to bring a copy
+              Sign in to bring your own book
             </button>
-          </div>
-        )}
+          )}
+        </div>
+      </section>
+
+      <section className="border-y border-white/10 bg-[#17241d]">
+        <div className="mx-auto max-w-3xl px-6 py-16">
+          <h2 className="font-[family-name:var(--font-serif)] text-[28px] leading-tight sm:text-[32px]">
+            The constraint is the product.
+          </h2>
+          <p className="mt-4 max-w-xl text-[16px] leading-relaxed text-[#cbbda4]">
+            Summaries optimize for coverage. Ken optimizes for internalization.
+          </p>
+          <p className="mt-4 max-w-xl text-[16px] leading-relaxed text-[#cbbda4]">
+            You cannot skip ahead. You cannot collect a polished explanation and call it learning. You read, answer, get
+            corrected, and move only when you can explain the argument yourself.
+          </p>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-3xl px-6 py-16">
+        <div className="rounded-lg border border-white/10 bg-[#17241d] px-6 py-7">
+          <div className="text-[11px] uppercase tracking-wide text-[#c4a15a]">Public demo</div>
+          <h3 className="mt-2 font-[family-name:var(--font-serif)] text-[24px] leading-tight">
+            Adam Smith’s <em>The Wealth of Nations</em>
+          </h3>
+          <p className="mt-3 text-[15px] leading-relaxed text-[#cbbda4]">
+            {DEMO_UNIT_COUNT} units. The next one unlocks only when you earn it.
+          </p>
+          <button
+            type="button"
+            onClick={() => router.push(demoHref)}
+            className="mt-6 rounded-md bg-[#c4a15a] px-5 py-2.5 text-[14px] font-medium text-[#1c2d24] hover:bg-[#d4b36c]"
+          >
+            Start the public demo
+          </button>
+        </div>
+
+        {user ? (
+          <form
+            id="bring-your-copy"
+            onSubmit={(event) => void onUpload(event)}
+            className="mt-8 scroll-mt-8 rounded-lg border border-white/10 bg-[#17241d] px-6 py-7"
+          >
+            <div className="flex items-center gap-2 text-[15px] font-medium">
+              <Upload className="size-4 text-[#c4a15a]" />
+              Bring your own book
+            </div>
+            <p className="mt-2 text-[13px] text-[#cbbda4]">
+              PDF or EPUB you have the right to read. Digital text only — scanned pages are not supported yet.
+            </p>
+            <input
+              name="file"
+              type="file"
+              accept=".pdf,.epub,application/pdf,application/epub+zip"
+              required
+              className="mt-4 block w-full text-[13px] file:mr-3 file:rounded-md file:border-0 file:bg-[#c4a15a] file:px-3 file:py-1.5 file:text-[12px] file:font-medium file:text-[#1c2d24]"
+            />
+            <label className="mt-4 flex items-start gap-2 text-[13px] leading-relaxed text-[#cbbda4]">
+              <input
+                type="checkbox"
+                checked={attested}
+                onChange={(event) => setAttested(event.target.checked)}
+                className="mt-1"
+              />
+              I have the right to read this copy. Ken will not share it or become a library for others.
+            </label>
+            <button
+              type="submit"
+              disabled={busy || !attested}
+              className="mt-4 rounded-md bg-[#c4a15a] px-4 py-2 text-[13px] font-medium text-[#1c2d24] disabled:opacity-40"
+            >
+              {busy ? "Ingesting…" : "Tutor this copy"}
+            </button>
+          </form>
+        ) : null}
 
         {mine.length > 0 && (
           <div className="mt-10">
@@ -213,7 +256,7 @@ export function Library() {
         )}
 
         {error ? <p className="mt-4 text-[13px] text-[#e2b1a0]">{error}</p> : null}
-      </main>
+      </section>
     </div>
   );
 }
