@@ -13,6 +13,27 @@ import type { Corpus, ProgressPayload, TutorState, Unit } from "@/lib/types";
 
 const ASSISTANT_ID = process.env.NEXT_PUBLIC_ASSISTANT_ID || "agent";
 
+function tutorApiUrl(copyId: string) {
+  const path = `/api/tutor/${copyId}`;
+  if (typeof window === "undefined") return path;
+  return `${window.location.origin}${path}`;
+}
+
+function errorText(error: unknown) {
+  if (!error) return null;
+  const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const json = raw.match(/\{[\s\S]*\}$/);
+  if (json) {
+    try {
+      const parsed = JSON.parse(json[0]) as { detail?: unknown };
+      if (typeof parsed.detail === "string" && parsed.detail.trim()) return parsed.detail;
+    } catch {
+      /* keep raw */
+    }
+  }
+  return raw.trim() || "The tutor could not start.";
+}
+
 function unitLabel(unit: Unit) {
   const part = unit.part_title ? ` — ${unit.part_title}` : "";
   return `${unit.book}: ${unit.title}${part}`;
@@ -83,7 +104,7 @@ function StudioApp({
   }, [copyId]);
 
   const stream = useStream<TutorState>({
-    apiUrl: `/api/tutor/${copyId}`,
+    apiUrl: tutorApiUrl(copyId),
     assistantId: ASSISTANT_ID,
     threadId,
     onThreadId: (id) => setThreadId(id),
@@ -97,6 +118,12 @@ function StudioApp({
   }, [values.mastery, progress]);
   const firstId = units[0]?.id;
   const activeId = pinnedId ?? values.current_chapter_id ?? progress?.currentUnitId ?? firstId;
+  const nextUnit = useMemo(() => {
+    const index = units.findIndex((unit) => unit.id === activeId);
+    return index >= 0 ? units[index + 1] : undefined;
+  }, [units, activeId]);
+  const passedCurrent = Boolean(activeId && mastery[activeId]?.status === "mastered");
+  const canBeginNext = Boolean(passedCurrent && nextUnit && mastery[nextUnit.id]?.unlocked);
   const activeUnit = useMemo(
     () => units.find((unit) => unit.id === activeId),
     [units, activeId],
@@ -239,10 +266,14 @@ function StudioApp({
             mode={values.mode}
             quiz={values.open_quiz}
             isLoading={stream.isLoading}
+            error={errorText(stream.error)}
             onCite={setHighlightId}
             citeIndex={citeIndex}
             onBegin={firstId ? () => openUnit(firstId) : undefined}
             beginLabel="Begin"
+            onBeginNext={canBeginNext && nextUnit ? () => openUnit(nextUnit.id) : undefined}
+            beginNextLabel={nextUnit ? `Begin next · ${nextUnit.book}` : undefined}
+            showReadyForTest={!passedCurrent}
             onSend={(text) => submitText(text)}
             onQuiz={(answers) =>
               submitText(`[[QUIZ_SUBMISSION]]\n${JSON.stringify({ answers })}`)

@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { userThreads } from "@/lib/db/schema";
-import { langgraphUrl } from "@/lib/auth/config";
+import { assistantId, langgraphUrl } from "@/lib/auth/config";
 import { firstUnitId, loadCorpus } from "@/lib/corpus";
 import { loadMasteryMap } from "@/lib/progress";
 
@@ -34,7 +34,10 @@ export async function ensureThread(userId: string, copyId: string): Promise<stri
     .limit(1);
   if (existing[0]) return existing[0].langgraphThreadId;
 
-  const created = await langgraph("/threads", { method: "POST", body: "{}" });
+  const created = await langgraph("/threads", {
+    method: "POST",
+    body: JSON.stringify({ metadata: { graph_id: assistantId() } }),
+  });
   const payload = (await created.json()) as { thread_id: string };
   const threadId = payload.thread_id;
   const corpus = await loadCorpus(copyId);

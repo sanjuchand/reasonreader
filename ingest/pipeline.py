@@ -10,6 +10,7 @@ import blob_store
 import copy_store
 from ingest.constants import DEMO_COPY_ID, EMBED_BATCH, EMBED_MODEL, SMITH_HTML
 from ingest.gutenberg import parse_chapters
+from ingest.questions import attach_questions
 from ingest.unitize import assign_opaque_ids, build_chunks, build_units, public_units
 
 
@@ -104,6 +105,7 @@ def ingest_copy(copy_id: str, *, embed: bool = True) -> dict:
             author = copy.get("author") or author
             smith = True
         units = assign_opaque_ids(build_units(chapters, track_smith_books=smith))
+        units = attach_questions(units)
         chunks = build_chunks(units)
         if not embed:
             raise ValueError("Ingest requires embeddings")
@@ -117,6 +119,22 @@ def ingest_copy(copy_id: str, *, embed: bool = True) -> dict:
     except Exception as exc:
         copy_store.set_copy_status(copy_id, "failed", error=str(exc)[:500])
         raise
+
+
+def write_questions(copy_id: str, *, force: bool = False) -> dict:
+    from corpus_store import bust_copy, load_book
+
+    book = load_book(copy_id)
+    units = book.get("units") or []
+    if force:
+        for unit in units:
+            unit.pop("questions", None)
+    attach_questions(units)
+    payload = json.dumps(book, ensure_ascii=False, indent=2).encode("utf-8")
+    blob_store.put_bytes(blob_store.copy_key(copy_id, "chapters.json"), payload, "application/json")
+    bust_copy(copy_id)
+    written = sum(1 for unit in units if unit.get("questions"))
+    return {"copy_id": copy_id, "units": len(units), "with_questions": written}
 
 
 def seed_demo(*, embed: bool = True) -> dict:

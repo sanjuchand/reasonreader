@@ -1,0 +1,15 @@
+.venv
+.env
+.env.production.example
+.git
+.github
+.cursor
+.langgraph_api
+.pytest_cache
+__pycache__
+data/blobs
+web/node_modules
+web/.next
+web/.env.local
+*.pyc
+.DS_Store

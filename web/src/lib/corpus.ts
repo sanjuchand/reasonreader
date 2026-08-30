@@ -7,7 +7,14 @@ export async function loadCorpus(copyId: string): Promise<Corpus> {
     throw new Error("Corpus not built for this copy.");
   }
   const raw = await getBytes(key);
-  return JSON.parse(raw.toString("utf8")) as Corpus;
+  const corpus = JSON.parse(raw.toString("utf8")) as Corpus;
+  return {
+    ...corpus,
+    units: (corpus.units || []).map((unit) => {
+      const { questions: _questions, ...reader } = unit as Unit & { questions?: unknown };
+      return reader;
+    }),
+  };
 }
 
 export function firstUnitId(units: Unit[]): string | undefined {

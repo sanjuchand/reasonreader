@@ -12,55 +12,62 @@ from typing import Annotated, Any, Literal, NotRequired
 
 from dotenv import load_dotenv
 from langchain.agents import AgentState, create_agent
-from langchain.agents.middleware import ModelRequest, ModelResponse, SummarizationMiddleware, wrap_model_call
+from langchain.agents.middleware import ModelRequest, ModelResponse, wrap_model_call
 from langchain.chat_models import init_chat_model
-from langchain.messages import AIMessage, SystemMessage, ToolMessage
+from langchain.messages import AIMessage, SystemMessage
 from langchain.tools import ToolRuntime, tool
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from copy_store import get_copy
 from flavors import flavor_addendum
 from ingest.constants import DEMO_COPY_ID
+from event_store import events_from_judgment, record_events
 from progress_store import save_progress
 from corpus_store import (
     asearch,
+    claim_lines,
     curriculum_toc,
+    filter_unit_questions,
     first_unit_id,
     get_chapter_outline,
     get_unit,
     initial_mastery,
     load_book,
     next_unit_id,
+    persist_unit_questions,
+    student_quiz,
 )
 
 load_dotenv()
 
 MASTERY_THRESHOLD = 0.8
 QUIZ_PREFIX = "[[QUIZ_SUBMISSION]]"
+READY_PREFIX = "[[READY_FOR_TEST]]"
 NAV_RE = re.compile(r"^\[NAV\]\s+unit_id=(\S+)")
 SKIP_QUIZ_RE = re.compile(r"^\[\[SKIP_QUIZ\]\]")
-READY_RE = re.compile(
-    r"\b(quiz me|test me|i am ready|i'm ready|ready to be tested|give me (a |the )?quiz|i think i('ve| have) got it)\b",
-    re.I,
-)
-SHORT_READY_RE = re.compile(r"^(quiz|test|ready)(\s+me)?[.!]?\s*$", re.I)
+READY_RE = re.compile(r"\b(quiz me|test me|ready to be tested|give me (a |the )?quiz)\b", re.I)
+MODEL_HISTORY_KEEP = 8
 
 TEACH_PROMPT = """You are a demanding close-reading tutor of the book named in the session briefing.
 
 Your job is that the student *internalize this author's actual argument*, not a slogan or a modern paraphrase.
 
 Rules:
+- The briefing lists the claims that define this unit. Those claims are the course. Teach them, in order, from the page.
+- If the student wanders, take one turn, then return to the next untaught claim. Do not invent a new syllabus from the chat.
 - Teach only the current unit. Do not skip ahead.
 - Cite with exactly one token per claim, like [@u0003:p2], using a paragraph_id from search_book or the outline. Never invent ids. Never write ranges such as [@u0001:p1-@u0001:p3]; emit separate tokens instead.
 - Quote the author sparingly (a sentence or two), then make the student work: Socratic questions, distinctions, counterexamples the author uses.
+- Ask at most one question, then stop and wait. Do not answer it yourself. Do not keep teaching after a question mark.
 - If the student is wrong, say so plainly and point at the passage.
-- When the student has engaged a claim, go deeper into this unit — a distinction, a number, a counterexample they have not yet touched. Do not call present_quiz just because they answered your last Socratic question.
-- Call present_quiz only if they explicitly ask to be tested (quiz me / test me / I am ready). Never re-ask, as a form, the same points they just stated in chat.
+- Never write the exam questions or their wording in chat. Never give answers they can paste.
+- You do not unlock units, administer a course, or announce exams.
+- If this unit is already mastered, do not reteach it. Point them at Begin next.
+- If they type move on, continue, or unlock while this unit is still in play, point them at Ready to be tested.
+- Never say a unit is locked if the briefing lists it as unlocked or as the current unit.
 - If the latest user message is a quiz submission and you are teaching a *new* unit, congratulate briefly, then start this unit. Do not re-score the quiz.
 - Never dump a whole chapter into the chat. Use get_chapter_outline and search_book.
-- Do not give exam answers the student can paste. Make them reconstruct the argument.
 """
 
 REVISE_PROMPT = """You are reteaching the weak concepts listed in the session briefing. The student just failed or only partly grasped them.
@@ -70,7 +77,8 @@ Rules:
 - Cite with one [@u0000:p0] token per claim from search_book. Never invent ids or ranges.
 - Contrast what they said with what the author actually wrote.
 - Offer a different angle than the first teaching pass (a concrete example, a distinction, a failure case).
-- After the reteach, call present_quiz with 2–3 short-answer questions aimed *only* at those weak concepts. No multiple choice.
+- Ask at most one question, then stop and wait. Do not answer it yourself. Do not bring the test back in the same turn.
+- Do not close the session or ask if they have other questions. After they reconstruct the weak claim, stop. They will use Ready to be tested when they want the written question again.
 - If the latest user message is a quiz submission, do not re-score it; that already happened. Start the reteach immediately.
 """
 
@@ -92,17 +100,6 @@ class TutorState(AgentState):
 
 def copy_id_of(state: dict | None) -> str:
     return (state or {}).get("copy_id") or DEMO_COPY_ID
-
-
-class QuizQuestion(BaseModel):
-    id: str
-    prompt: str
-    concept: str
-    kind: Literal["explain", "apply", "distinguish"] = "explain"
-
-
-class Quiz(BaseModel):
-    questions: list[QuizQuestion] = Field(min_length=2, max_length=4)
 
 
 class ConceptScore(BaseModel):
@@ -191,12 +188,76 @@ def is_quiz_submission(text: str) -> bool:
     return text.lstrip().startswith(QUIZ_PREFIX)
 
 
+def is_protocol_text(text: str) -> bool:
+    stripped = (text or "").lstrip()
+    if not stripped:
+        return True
+    if stripped.startswith(READY_PREFIX) or is_skip_quiz(stripped):
+        return True
+    return bool(NAV_RE.match(stripped))
+
+
+def is_tool_message(message: Any) -> bool:
+    return _message_type(message) in {"tool", "function"}
+
+
+def last_quiz_answer_clip(state: dict, *, limit: int = 280) -> str:
+    for message in reversed(state.get("messages") or []):
+        text = _message_text(message)
+        if not is_quiz_submission(text):
+            continue
+        lines = []
+        for item in parse_quiz_answers(text)[:3]:
+            answer = (item.get("answer") or "").strip()
+            if answer:
+                lines.append(f"- {answer[:limit]}")
+        return "\n".join(lines)
+    return ""
+
+
+def trim_model_messages(messages: list, *, keep: int = MODEL_HISTORY_KEEP) -> list:
+    """Keep a short conversational window plus the current turn.
+
+    Drops historical tool dumps, NAV/ready tokens, old quiz JSON, and
+    summarizer injections. The current human message and any tools from
+    this turn stay so the agent can use fresh search hits.
+    """
+    if not messages:
+        return []
+    last_human = None
+    for index in range(len(messages) - 1, -1, -1):
+        if _message_type(messages[index]) not in {"human", "user"}:
+            continue
+        if is_context_summary(messages[index]):
+            continue
+        last_human = index
+        break
+    if last_human is None:
+        return list(messages[-keep:])
+    selected = []
+    for message in messages[:last_human]:
+        if is_tool_message(message) or is_context_summary(message):
+            continue
+        if _message_type(message) not in {"human", "user", "ai", "assistant"}:
+            continue
+        text = _message_text(message)
+        if is_protocol_text(text) or is_quiz_submission(text):
+            continue
+        if not text.strip():
+            continue
+        selected.append(message)
+    return selected[-keep:] + list(messages[last_human:])
+
+
 def is_ready_for_test(text: str) -> bool:
     if is_quiz_submission(text):
         return False
     if NAV_RE.match(text.lstrip()):
         return False
-    return bool(READY_RE.search(text or "")) or bool(SHORT_READY_RE.match((text or "").strip()))
+    stripped = (text or "").lstrip()
+    if stripped.startswith(READY_PREFIX):
+        return True
+    return bool(READY_RE.search(text or ""))
 
 
 def parse_quiz_answers(text: str) -> list[dict]:
@@ -211,6 +272,58 @@ def parse_quiz_answers(text: str) -> list[dict]:
     if isinstance(answers, list):
         return answers
     return [{"id": "answer", "answer": raw}]
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", (text or "").lower())
+
+
+def is_mostly_recitation(answer: str, sources: list[str], *, threshold: float = 0.72) -> bool:
+    words = _words(answer)
+    if len(words) < 12:
+        return False
+    answer_line = " ".join(words)
+    source_words = _words(" ".join(sources))
+    if not source_words:
+        return False
+    source_line = " ".join(source_words)
+    if len(answer_line) > 80 and answer_line in source_line:
+        return True
+    window = len(words)
+    answer_set = set(words)
+    for start in range(0, max(1, len(source_words) - window + 1)):
+        chunk = source_words[start : start + window]
+        union = answer_set | set(chunk)
+        if union and len(answer_set & set(chunk)) / len(union) >= threshold:
+            return True
+    overlap = sum(1 for word in words if word in set(source_words)) / len(words)
+    return overlap >= 0.88 and len(words) >= 20
+
+
+def apply_recitation_misses(judgment: Judgment, paired: list[dict]) -> Judgment:
+    reciting = {i for i, item in enumerate(paired) if item.get("recitation")}
+    if not reciting:
+        return judgment
+    concepts = []
+    for index, concept in enumerate(judgment.concepts):
+        if index in reciting:
+            concepts.append(
+                concept.model_copy(
+                    update={
+                        "score": "miss",
+                        "reteach_angle": "Ask them to reconstruct the claim in their own words.",
+                    }
+                )
+            )
+        else:
+            concepts.append(concept)
+    weights = {"mastered": 1.0, "partial": 0.5, "miss": 0.0}
+    overall = sum(weights[item.score] for item in concepts) / len(concepts) if concepts else 0.0
+    extra = "Those lines are the author's. Put the claim in your own words."
+    summary = (judgment.summary_for_student or "").strip()
+    if extra not in summary:
+        summary = f"{summary} {extra}".strip()
+    return judgment.model_copy(update={"concepts": concepts, "overall": overall, "summary_for_student": summary})
 
 
 def unit_label(unit: dict) -> str:
@@ -237,13 +350,33 @@ def _briefing(state: dict) -> str:
         f"Copy id: {cid}\n"
         f"Current unit id: {unit_id}\n"
         f"Current unit: {unit_label(unit) if unit else unit_id}\n"
+        f"Current unit status: {(mastery.get(unit_id) or {}).get('status') or 'in_progress'}\n"
         f"Mode: {state.get('mode') or 'teach'}\n"
         f"Unlocked units: {', '.join(unlocked[:12])}{'…' if len(unlocked) > 12 else ''}\n"
-        f"Next locked unit: {unit_label(nxt_unit) if nxt_unit and nxt not in unlocked else (nxt or 'none')}\n"
+        f"Next unit: {unit_label(nxt_unit) if nxt_unit else 'none'}"
+        f"{' — unlocked' if nxt and nxt in unlocked else (' — locked' if nxt else '')}\n"
+        "If current unit is mastered, do not teach it. The student uses Begin next.\n"
         f"Weak concepts to hit: {', '.join(weak) if weak else 'none'}\n"
-        "Citation format: one [@paragraph_id] token per claim, e.g. [@u0003:p2]. Never ranges."
+        f"{_last_test_lines(state)}"
+        "Citation format: one [@paragraph_id] token per claim, e.g. [@u0003:p2]. Never ranges.\n"
+        f"{claim_lines(unit)}"
         f"{flavor_block}"
     )
+
+
+def _last_test_lines(state: dict) -> str:
+    judgment = state.get("last_judgment") or {}
+    answers = last_quiz_answer_clip(state)
+    if not judgment and not answers:
+        return ""
+    parts = ["Last written test — do not re-score."]
+    summary = (judgment.get("summary_for_student") or "").strip()
+    if summary:
+        parts.append(summary)
+    if answers:
+        parts.append("Their last answers:")
+        parts.append(answers)
+    return "\n".join(parts) + "\n"
 
 
 @wrap_model_call
@@ -256,7 +389,9 @@ async def inject_briefing(request: ModelRequest, handler) -> ModelResponse:
             block.get("text", "") if isinstance(block, dict) else str(block) for block in prior
         )
     merged = SystemMessage(content=f"{prior}\n\n--- session briefing ---\n{extra}")
-    return await handler(request.override(system_message=merged))
+    return await handler(
+        request.override(system_message=merged, messages=trim_model_messages(request.messages))
+    )
 
 
 @tool
@@ -270,7 +405,7 @@ async def search_book(query: str, unit_id: str | None = None, runtime: ToolRunti
             "unit_id": hit["unit_id"],
             "book": hit["book"],
             "title": hit["title"],
-            "quote": hit["text"][:900],
+            "quote": hit["text"][:480],
             "score": hit["score"],
         }
         for hit in hits
@@ -285,29 +420,17 @@ def get_chapter_outline_tool(unit_id: str | None = None, runtime: ToolRuntime = 
     return get_chapter_outline(cid, target)
 
 
-@tool
-def list_curriculum(runtime: ToolRuntime) -> list[dict]:
-    """Table of contents with lock/mastery status for each unit."""
-    cid = copy_id_of(runtime.state)
-    return curriculum_toc(cid, runtime.state.get("mastery") or {})
+def ensure_unit_exam(copy_id: str, unit: dict) -> list[dict]:
+    questions = list(unit.get("questions") or [])
+    if questions:
+        return questions
+    from ingest.questions import generate_questions_for_unit
 
-
-@tool
-def present_quiz(questions: list[QuizQuestion], runtime: ToolRuntime) -> Command:
-    """Present a short-answer quiz. Call only when the student asked to be tested, never to re-form answers they just gave in chat."""
-    quiz = Quiz(questions=questions)
-    return Command(
-        update={
-            "mode": "test",
-            "open_quiz": quiz.model_dump(),
-            "messages": [
-                ToolMessage(
-                    "Quiz is now on screen. Wait for the student's written answers; do not grade yet.",
-                    tool_call_id=runtime.tool_call_id,
-                )
-            ],
-        }
-    )
+    questions = generate_questions_for_unit(unit)
+    if questions and unit.get("id"):
+        persist_unit_questions(copy_id, unit["id"], questions)
+        unit["questions"] = questions
+    return questions
 
 
 def prep(state: TutorState) -> dict:
@@ -342,9 +465,31 @@ def prep(state: TutorState) -> dict:
         updates["mode"] = "teach"
         updates["open_quiz"] = None
         updates["weak_concepts"] = []
+        record_events(
+            [
+                {
+                    "user_id": state.get("user_id"),
+                    "copy_id": cid,
+                    "unit_id": requested,
+                    "kind": "opened_unit",
+                    "payload": {"source": "live"},
+                }
+            ]
+        )
     elif is_skip_quiz(text) and state.get("open_quiz"):
         updates["mode"] = "teach"
         updates["open_quiz"] = None
+        record_events(
+            [
+                {
+                    "user_id": state.get("user_id"),
+                    "copy_id": cid,
+                    "unit_id": requested,
+                    "kind": "keep_teaching",
+                    "payload": {"source": "live"},
+                }
+            ]
+        )
     return updates
 
 
@@ -361,20 +506,6 @@ def route(state: TutorState) -> str:
     return "teach"
 
 
-def after_judge(state: TutorState) -> str:
-    if state.get("mode") == "revise":
-        return "revise"
-    if state.get("mode") == "teach":
-        return "teach"
-    return END
-
-
-def after_revise(state: TutorState) -> str:
-    if state.get("open_quiz"):
-        return END
-    return "test"
-
-
 async def _passages_for(copy_id: str, unit_id: str, query: str, k: int = 6) -> str:
     hits = await asearch(copy_id, query, unit_id=unit_id, k=k)
     lines = []
@@ -387,41 +518,21 @@ async def test_node(state: TutorState) -> dict:
     cid = copy_id_of(state)
     unit_id = state.get("current_chapter_id") or first_unit_id(cid)
     unit = get_unit(cid, unit_id) or {}
-    weak = state.get("weak_concepts") or []
-    outline = get_chapter_outline(cid, unit_id)
-    query = "; ".join(weak) if weak else (unit.get("title") or "core argument")
-    passages = await _passages_for(cid, unit_id, query)
-    focus = (
-        f"Write questions ONLY on these weak concepts: {weak}"
-        if weak
-        else "Cover the unit's 2–3 load-bearing claims, including at least one distinction or application."
-    )
-    model = init_chat_model("gpt-4o")
-    quiz = await model.with_structured_output(Quiz).ainvoke(
+    questions = filter_unit_questions(ensure_unit_exam(cid, unit), state.get("weak_concepts"))
+    record_events(
         [
-            SystemMessage(
-                content=(
-                    "You write short-answer tests on this unit for a student who has just been taught it. "
-                    "No multiple choice. Questions must be answerable from the passages. "
-                    f"{focus}"
-                )
-            ),
-            AIMessage(
-                content=(
-                    f"Unit: {unit_label(unit)}\nOutline: {json.dumps(outline.get('outline', [])[:10])}\n\n"
-                    f"Passages:\n{passages}"
-                )
-            ),
+            {
+                "user_id": state.get("user_id"),
+                "copy_id": cid,
+                "unit_id": unit_id,
+                "kind": "ready_for_test",
+                "payload": {"source": "live", "question_count": len(questions)},
+            }
         ]
     )
     return {
         "mode": "test",
-        "open_quiz": quiz.model_dump(),
-        "messages": [
-            AIMessage(
-                content="Time to see whether this has settled. Answer in your own words in the fields below — not slogans, not recitations."
-            )
-        ],
+        "open_quiz": student_quiz(questions),
     }
 
 
@@ -441,18 +552,18 @@ def _format_judgment(judgment: Judgment, advancing: bool, next_label: str | None
     body = (judgment.summary_for_student or "").strip()
     if advancing:
         if next_label:
-            closer = f"That's enough for this chapter. Next is {next_label}."
+            closer = f"That's enough for this unit. Next is {next_label}. Use Begin next when you want to start it."
         else:
             closer = "That's the last unit in the book. We can keep reviewing whenever you like."
     else:
         weak = [c.concept for c in judgment.concepts if c.score != "mastered"]
         if len(weak) == 1:
-            closer = f"We'll stay on this unit and come back to {weak[0]} — then I'll ask you again on that."
+            closer = f"We'll stay on this unit and come back to {weak[0]}. Use Ready to be tested when you want that question again."
         elif weak:
             listed = ", ".join(weak[:-1]) + f", and {weak[-1]}"
-            closer = f"We'll stay on this unit and come back to {listed} — then I'll ask you again on those."
+            closer = f"We'll stay on this unit and come back to {listed}. Use Ready to be tested when you want those questions again."
         else:
-            closer = "We'll stay on this unit a little longer, then I'll ask you again."
+            closer = "We'll stay on this unit a little longer. Use Ready to be tested when you want the questions again."
     return normalize_citation_tokens(f"{body}\n\n{closer}".strip())
 
 
@@ -470,6 +581,9 @@ async def judge_node(state: TutorState) -> dict:
             match = next((a for a in answers if isinstance(a, dict) and a.get("id") == question.get("id")), None)
             answer = (match or {}).get("answer", "")
         paired.append({"question": question, "answer": answer})
+    source_texts = [paragraph.get("text") or "" for paragraph in unit.get("paragraphs") or []]
+    for item in paired:
+        item["recitation"] = is_mostly_recitation(item["answer"], source_texts)
     concepts = [q.get("concept") or q.get("prompt", "") for q in questions]
     passages = await _passages_for(cid, unit_id, " ".join(concepts) or unit.get("title", ""), k=8)
     model = init_chat_model("gpt-4o")
@@ -479,8 +593,10 @@ async def judge_node(state: TutorState) -> dict:
                 content=(
                     "You are a close-reading tutor scoring a short-answer test on this unit. "
                     "Score each answer against the passages, not a modern textbook rewrite. "
-                    "miss = wrong, empty, or 'I don't know'; partial = some of the idea, missing a mechanism "
-                    "the author insists on; mastered = could teach it. "
+                    "miss = wrong, empty, 'I don't know', or a recitation of the author's sentences; "
+                    "partial = some of the idea, missing a mechanism the author insists on; "
+                    "mastered = could teach it in their own words. "
+                    "If recitation is true for an answer, score miss and tell them to use their own words. "
                     "overall is the mean of those scores (mastered=1, partial=0.5, miss=0). "
                     "Put the technical justification in each concept's evidence field — that is internal. "
                     "summary_for_student is the only text the student will read: 3–6 sentences in second person, "
@@ -500,6 +616,7 @@ async def judge_node(state: TutorState) -> dict:
             ),
         ]
     )
+    judgment = apply_recitation_misses(judgment, paired)
 
     mastery = dict(state.get("mastery") or initial_mastery(cid))
     entry = dict(mastery.get(unit_id) or {"unlocked": True})
@@ -507,7 +624,6 @@ async def judge_node(state: TutorState) -> dict:
     entry["concepts"] = [c.model_dump() for c in judgment.concepts]
     revise = _should_revise(judgment)
     weak = [c.concept for c in judgment.concepts if c.score != "mastered"]
-    new_current = unit_id
     next_label = None
     if revise:
         entry["status"] = "revise"
@@ -523,78 +639,49 @@ async def judge_node(state: TutorState) -> dict:
             if nxt_entry.get("status") in (None, "locked"):
                 nxt_entry["status"] = "in_progress"
             mastery[nxt] = nxt_entry
-            new_current = nxt
             nxt_unit = get_unit(cid, nxt)
             next_label = unit_label(nxt_unit) if nxt_unit else nxt
     mastery[unit_id] = entry
     save_progress(state.get("user_id"), cid, mastery)
+    record_events(
+        events_from_judgment(
+            user_id=state.get("user_id"),
+            copy_id=cid,
+            unit_id=unit_id,
+            paired=paired,
+            judgment=judgment,
+            revise=revise,
+        )
+    )
     return {
         "mastery": mastery,
         "mode": next_mode,
         "weak_concepts": weak,
         "open_quiz": None,
         "last_judgment": judgment.model_dump(),
-        "current_chapter_id": new_current,
+        "current_chapter_id": unit_id,
         "messages": [AIMessage(content=_format_judgment(judgment, advancing=not revise, next_label=next_label))],
     }
 
 
-retrieval_tools = [search_book, get_chapter_outline_tool, list_curriculum, present_quiz]
-
-TUTOR_SUMMARY_PROMPT = """You compress a close-reading tutoring session on the student's current book.
-
-Preserve the student's own examples, mistakes, and distinctions. Quote them. Do not recast the session as a quiz-submission workflow unless the latest student message is actually a quiz.
-
-Structure:
-
-## CURRENT UNIT
-Which unit is being taught, and which of the author's claims have already been covered.
-
-## STUDENT THINKING
-What the student has argued, analogized, or gotten wrong.
-
-## STILL OPEN
-The tutor's last unanswered question, and what in this unit has not yet been taught.
-
-Do not invent a SESSION INTENT. Do not mention artifacts or files.
-
-<messages>
-Messages to summarize:
-{messages}
-</messages>
-"""
-
-
-def _history_middleware() -> SummarizationMiddleware:
-    return SummarizationMiddleware(
-        model="gpt-4o-mini",
-        trigger=("tokens", 32000),
-        keep=("messages", 20),
-        summary_prompt=TUTOR_SUMMARY_PROMPT,
-    )
-
+teach_tools = [search_book, get_chapter_outline_tool]
+revise_tools = [search_book, get_chapter_outline_tool]
 
 teach_agent = create_agent(
     model="gpt-4o",
-    tools=retrieval_tools,
+    tools=teach_tools,
     state_schema=TutorState,
     system_prompt=TEACH_PROMPT,
-    middleware=[
-        inject_briefing,
-        _history_middleware(),
-    ],
+    middleware=[inject_briefing],
     name="teach",
 )
 
 revise_agent = create_agent(
     model="gpt-4o",
-    tools=retrieval_tools,
+    tools=revise_tools,
     state_schema=TutorState,
     system_prompt=REVISE_PROMPT,
-    middleware=[
-        inject_briefing,
-        _history_middleware(),
-    ],
+    middleware=[inject_briefing],
     name="revise",
 )
 
@@ -608,7 +695,7 @@ builder.add_edge(START, "prep")
 builder.add_conditional_edges("prep", route, ["teach", "test", "judge", "revise"])
 builder.add_edge("teach", END)
 builder.add_edge("test", END)
-builder.add_conditional_edges("judge", after_judge, {"revise": "revise", "teach": "teach", END: END})
-builder.add_conditional_edges("revise", after_revise, {"test": "test", END: END})
+builder.add_edge("judge", END)
+builder.add_edge("revise", END)
 
 agent = builder.compile()

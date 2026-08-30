@@ -54,7 +54,13 @@ async function proxy(request: NextRequest, ctx: Ctx) {
 
   const segments = path || [];
   const needsThread = segments[0] === "threads";
-  const owned = needsThread ? await ensureThread(user.id, copyId) : "";
+  let owned = "";
+  try {
+    owned = needsThread ? await ensureThread(user.id, copyId) : "";
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "Failed to open tutor thread";
+    return NextResponse.json({ detail }, { status: 500 });
+  }
   const targetThread = threadIdFrom(segments);
   if (needsThread && targetThread && !userOwnsThread(owned, targetThread)) {
     return NextResponse.json({ detail: "Thread not found" }, { status: 404 });

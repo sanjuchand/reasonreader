@@ -1,5 +1,6 @@
 from ingest.gutenberg import SOURCE, parse_chapters
-from ingest.unitize import assign_opaque_ids, build_chunks, build_units
+from ingest.questions import unit_exam_source
+from ingest.unitize import assign_opaque_ids, build_chunks, build_units, public_units
 
 
 def _units() -> list[dict]:
@@ -80,3 +81,27 @@ def test_chunks_keep_unit_metadata():
     labour_chunks = [c for c in chunks if c["unit_id"] == labour_id]
     assert labour_chunks
     assert all("paragraph_id" in c and "unit_id" in c for c in labour_chunks)
+
+
+def test_exam_source_uses_paragraph_ids():
+    units = _units()
+    source = unit_exam_source(units[0])
+    assert "[u0000:p0]" in source
+    assert "labour" in source.lower() or "labor" in source.lower()
+
+
+def test_public_units_keep_questions_and_drop_full_text():
+    units = _units()
+    units[0]["questions"] = [
+        {
+            "id": "q1",
+            "concept": "annual labour",
+            "claim": "Labour is the fund.",
+            "prompt": "What is the fund?",
+            "kind": "explain",
+        }
+    ]
+    public = public_units(units)
+    assert "text" not in public[0]
+    assert "html" not in public[0]
+    assert public[0]["questions"][0]["concept"] == "annual labour"

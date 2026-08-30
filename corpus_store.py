@@ -87,6 +87,50 @@ def initial_mastery(copy_id: str = DEMO_COPY_ID) -> dict[str, dict]:
     return mastery
 
 
+def persist_unit_questions(copy_id: str, unit_id: str, questions: list[dict]) -> None:
+    key = blob_store.copy_key(copy_id, "chapters.json")
+    book = json.loads(blob_store.get_bytes(key).decode("utf-8"))
+    for unit in book.get("units") or []:
+        if unit.get("id") == unit_id:
+            unit["questions"] = questions
+            break
+    blob_store.put_bytes(key, json.dumps(book, ensure_ascii=False, indent=2).encode("utf-8"), "application/json")
+    bust_copy(copy_id)
+
+
+def filter_unit_questions(questions: list[dict], weak: list[str] | None = None) -> list[dict]:
+    if not questions:
+        return []
+    if not weak:
+        return list(questions)
+    needles = [item.lower() for item in weak]
+    picked = []
+    for question in questions:
+        concept = (question.get("concept") or "").lower()
+        if any(needle in concept or concept in needle for needle in needles if needle and concept):
+            picked.append(question)
+    return picked or list(questions)
+
+
+def student_quiz(questions: list[dict]) -> dict:
+    return {
+        "questions": [
+            {key: question[key] for key in ("id", "prompt", "concept", "kind") if key in question}
+            for question in questions
+        ]
+    }
+
+
+def claim_lines(unit: dict) -> str:
+    questions = unit.get("questions") or []
+    if not questions:
+        return "No stored exam yet. Teach the load-bearing claims in this unit from the text."
+    lines = ["Teach toward these claims. Do not recite an exam. Do not skip a claim."]
+    for question in questions:
+        lines.append(f"- [{question.get('concept')}] {question.get('claim') or question.get('prompt')}")
+    return "\n".join(lines)
+
+
 def get_chapter_outline(copy_id: str, unit_id: str) -> dict:
     unit = get_unit(copy_id, unit_id)
     if unit is None:

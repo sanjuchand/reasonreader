@@ -11,6 +11,10 @@ export const SESSION_MAX_AGE_SECONDS = Number(process.env.SESSION_MAX_AGE_SECOND
 export function langgraphUrl() {
   return process.env.LANGGRAPH_URL || "http://127.0.0.1:2024";
 }
+
+export function assistantId() {
+  return process.env.ASSISTANT_ID || process.env.NEXT_PUBLIC_ASSISTANT_ID || "agent";
+}
 export function isDev() {
   return process.env.NODE_ENV !== "production";
 }

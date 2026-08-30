@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
-    "db:migrate": "psql \"$DATABASE_URL\" -f drizzle/0000_init.sql"
+    "db:migrate": "psql \"$DATABASE_URL\" -f drizzle/0000_init.sql -f drizzle/0001_tutor_events.sql"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1120.0",

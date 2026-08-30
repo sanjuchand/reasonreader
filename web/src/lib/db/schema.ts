@@ -1,6 +1,7 @@
 import {
   boolean,
   doublePrecision,
+  integer,
   jsonb,
   pgTable,
   primaryKey,
@@ -67,3 +68,25 @@ export const unitProgress = pgTable(
   },
   (table) => [primaryKey({ columns: [table.userId, table.copyId, table.unitId] })],
 );
+
+export const tutorEvents = pgTable("tutor_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  copyId: uuid("copy_id")
+    .notNull()
+    .references(() => copies.id, { onDelete: "cascade" }),
+  threadId: text("thread_id"),
+  unitId: text("unit_id"),
+  kind: text("kind").notNull(),
+  concept: text("concept"),
+  score: text("score"),
+  recitation: boolean("recitation"),
+  overall: doublePrecision("overall"),
+  attempt: integer("attempt"),
+  answerChars: integer("answer_chars"),
+  answerClip: text("answer_clip"),
+  payload: jsonb("payload").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
