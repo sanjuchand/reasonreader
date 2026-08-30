@@ -18,5 +18,6 @@ def test_deploy_waits_for_green_ci_on_main():
     assert "workflows: [CI]" in DEPLOY
     assert "conclusion == 'success'" in DEPLOY
     assert "./scripts/deploy.sh" in DEPLOY
+    assert "command_timeout: 20m" in DEPLOY
     assert "VPS_SSH_KEY" in DEPLOY
     assert "VPS_HOST" in DEPLOY
