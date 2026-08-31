@@ -7,6 +7,9 @@ def test_prod_compose_binds_localhost_only():
     text = PROD.read_text()
     assert "127.0.0.1:3080:3000" in text
     assert "127.0.0.1:2024:2024" in text
+    assert "127.0.0.1:8090:8090" in text
+    assert "INGEST_URL: http://ingest:8090" in text
+    assert 'command: ["uv", "run", "python", "-m", "ingest.http_server"]' in text
     assert "127.0.0.1:5435:5432" in text
     assert "127.0.0.1:9100:9000" in text
     assert '"9000:9000"' not in text
