@@ -204,6 +204,56 @@ def is_tool_message(message: Any) -> bool:
     return _message_type(message) in {"tool", "function"}
 
 
+def _tool_call_ids(message: Any) -> set[str]:
+    calls = []
+    if isinstance(message, dict):
+        calls = message.get("tool_calls") or (message.get("additional_kwargs") or {}).get("tool_calls") or []
+    else:
+        calls = getattr(message, "tool_calls", None) or []
+        extra = getattr(message, "additional_kwargs", None) or {}
+        if not calls and isinstance(extra, dict):
+            calls = extra.get("tool_calls") or []
+    ids: set[str] = set()
+    for call in calls:
+        cid = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
+        if cid:
+            ids.add(str(cid))
+    return ids
+
+
+def _tool_response_id(message: Any) -> str | None:
+    if isinstance(message, dict):
+        return message.get("tool_call_id")
+    return getattr(message, "tool_call_id", None)
+
+
+def drop_unpaired_tool_calls(messages: list) -> list:
+    """OpenAI 400s if an assistant tool_calls message has no matching tool replies."""
+    kept: list = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        ids = _tool_call_ids(message)
+        if ids:
+            found: set[str] = set()
+            end = index + 1
+            while end < len(messages) and is_tool_message(messages[end]):
+                tid = _tool_response_id(messages[end])
+                if tid:
+                    found.add(str(tid))
+                end += 1
+            if ids <= found:
+                kept.extend(messages[index:end])
+            index = end
+            continue
+        if is_tool_message(message):
+            index += 1
+            continue
+        kept.append(message)
+        index += 1
+    return kept
+
+
 def last_quiz_answer_clip(state: dict, *, limit: int = 280) -> str:
     for message in reversed(state.get("messages") or []):
         text = _message_text(message)
@@ -239,7 +289,7 @@ def trim_model_messages(messages: list, *, keep: int = MODEL_HISTORY_KEEP) -> li
         return list(messages[-keep:])
     selected = []
     for message in messages[:last_human]:
-        if is_tool_message(message) or is_context_summary(message):
+        if is_tool_message(message) or is_context_summary(message) or _tool_call_ids(message):
             continue
         if _message_type(message) not in {"human", "user", "ai", "assistant"}:
             continue
@@ -249,7 +299,7 @@ def trim_model_messages(messages: list, *, keep: int = MODEL_HISTORY_KEEP) -> li
         if not text.strip():
             continue
         selected.append(message)
-    return selected[-keep:] + list(messages[last_human:])
+    return drop_unpaired_tool_calls(selected[-keep:] + list(messages[last_human:]))
 
 
 def is_ready_for_test(text: str) -> bool:

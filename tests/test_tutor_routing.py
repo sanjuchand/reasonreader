@@ -9,6 +9,7 @@ from tutor_agent import (
     normalize_citation_tokens,
     parse_quiz_answers,
     route,
+    is_tool_message,
     scope_search_unit,
     trim_model_messages,
     _format_judgment,
@@ -229,7 +230,17 @@ def test_trim_drops_tools_quizzes_and_protocol():
         {"type": "ai", "content": "Yes — now the nominal price."},
         {"type": "tool", "name": "search_book", "content": "old hit from chapter I"},
         {"type": "human", "content": "expand on this sentence"},
-        {"type": "tool", "name": "search_book", "content": "fresh hit"},
+        {
+            "type": "ai",
+            "content": "",
+            "tool_calls": [{"id": "call_fresh", "name": "search_book", "args": {}}],
+        },
+        {
+            "type": "tool",
+            "name": "search_book",
+            "tool_call_id": "call_fresh",
+            "content": "fresh hit",
+        },
     ]
     kept = trim_model_messages(messages, keep=8)
     texts = [m["content"] for m in kept]
@@ -242,6 +253,41 @@ def test_trim_drops_tools_quizzes_and_protocol():
     assert "fresh hit" in texts
     assert "Smith means labour is the real measure." in texts
     assert "Introduction claim." in texts
+
+
+def test_trim_drops_unpaired_tool_calls_from_a_failed_turn():
+    messages = [
+        {"type": "human", "content": "[NAV] unit_id=u0000 Opened introduction."},
+        {
+            "type": "ai",
+            "content": "",
+            "tool_calls": [{"id": "call_orphan", "name": "get_claim_passages", "args": {}}],
+        },
+    ]
+    kept = trim_model_messages(messages, keep=8)
+    assert not any(m.get("tool_calls") for m in kept)
+    assert not any(is_tool_message(m) for m in kept)
+    assert kept[-1]["content"].startswith("[NAV]")
+
+
+def test_trim_keeps_current_turn_tool_pair():
+    messages = [
+        {"type": "human", "content": "[NAV] unit_id=u0000 Opened introduction."},
+        {
+            "type": "ai",
+            "content": "",
+            "tool_calls": [{"id": "call_1", "name": "get_claim_passages", "args": {}}],
+        },
+        {
+            "type": "tool",
+            "name": "get_claim_passages",
+            "tool_call_id": "call_1",
+            "content": "claim text",
+        },
+    ]
+    kept = trim_model_messages(messages, keep=8)
+    assert any(m.get("tool_calls") for m in kept)
+    assert any(m.get("tool_call_id") == "call_1" for m in kept)
 
 
 def test_trim_keeps_only_a_short_window():
