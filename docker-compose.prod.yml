@@ -41,6 +41,8 @@ services:
       S3_ENDPOINT: http://minio:9000
     ports:
       - "127.0.0.1:2024:2024"
+    volumes:
+      - reasonreader_graph:/app/.langgraph_api
     depends_on:
       postgres:
         condition: service_healthy
@@ -95,3 +97,4 @@ services:
 volumes:
   reasonreader_postgres:
   reasonreader_minio:
+  reasonreader_graph:
