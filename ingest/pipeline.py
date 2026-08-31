@@ -104,7 +104,12 @@ def ingest_copy(copy_id: str, *, embed: bool = True) -> dict:
             title = copy.get("title") or title
             author = copy.get("author") or author
             smith = True
-        units = assign_opaque_ids(build_units(chapters, track_smith_books=smith))
+        units = build_units(chapters, track_smith_books=smith)
+        if not smith:
+            from ingest.unitize import usable_units
+
+            units = usable_units(units)
+        units = assign_opaque_ids(units)
         units = attach_questions(units)
         chunks = build_chunks(units)
         if not embed:

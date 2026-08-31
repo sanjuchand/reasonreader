@@ -9,6 +9,7 @@ from tutor_agent import (
     normalize_citation_tokens,
     parse_quiz_answers,
     route,
+    scope_search_unit,
     trim_model_messages,
     _format_judgment,
     _should_revise,
@@ -250,6 +251,12 @@ def test_trim_keeps_only_a_short_window():
     kept = trim_model_messages(messages, keep=6)
     assert kept[-1]["content"] == "now"
     assert len(kept) == 7
+
+
+def test_search_stays_inside_the_current_unit():
+    assert scope_search_unit({"current_chapter_id": "u0001"}, "u0099") == "u0001"
+    assert scope_search_unit({"current_chapter_id": "u0001"}, None) == "u0001"
+    assert scope_search_unit({}, "u0003") == "u0003"
 
 
 def test_last_quiz_clip_is_short():

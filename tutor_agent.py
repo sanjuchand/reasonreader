@@ -27,6 +27,7 @@ from progress_store import save_progress
 from corpus_store import (
     asearch,
     claim_lines,
+    claim_passages,
     curriculum_toc,
     filter_unit_questions,
     first_unit_id,
@@ -35,6 +36,7 @@ from corpus_store import (
     initial_mastery,
     load_book,
     next_unit_id,
+    passages_for_questions,
     persist_unit_questions,
     student_quiz,
 )
@@ -54,11 +56,11 @@ TEACH_PROMPT = """You are a demanding close-reading tutor of the book named in t
 Your job is that the student *internalize this author's actual argument*, not a slogan or a modern paraphrase.
 
 Rules:
-- The briefing lists the claims that define this unit. Those claims are the course. Teach them, in order, from the page.
+- The briefing lists the claims that define this unit, each with the paragraph_ids that carry it. Those claims are the course. Teach them, in order, from those paragraphs.
+- Call get_claim_passages before you teach a claim. Explain the mechanism in that excerpt. Do not replace it with a famous nearby example from another paragraph or chapter.
 - If the student wanders, take one turn, then return to the next untaught claim. Do not invent a new syllabus from the chat.
 - Teach only the current unit. Do not skip ahead.
-- Cite with exactly one token per claim, like [@u0003:p2], using a paragraph_id from search_book or the outline. Never invent ids. Never write ranges such as [@u0001:p1-@u0001:p3]; emit separate tokens instead.
-- Quote the author sparingly (a sentence or two), then make the student work: Socratic questions, distinctions, counterexamples the author uses.
+- Cite the paragraph_ids attached to the claim you are teaching, like [@u0003:p2]. Never invent ids. Never write ranges such as [@u0001:p1-@u0001:p3]; emit separate tokens instead. Do not bolt a citation onto an explanation of a different passage.
 - Ask at most one question, then stop and wait. Do not answer it yourself. Do not keep teaching after a question mark.
 - If the student is wrong, say so plainly and point at the passage.
 - Never write the exam questions or their wording in chat. Never give answers they can paste.
@@ -74,8 +76,9 @@ REVISE_PROMPT = """You are reteaching the weak concepts listed in the session br
 
 Rules:
 - Do not re-lecture the whole unit. Only the weak concepts.
-- Cite with one [@u0000:p0] token per claim from search_book. Never invent ids or ranges.
-- Contrast what they said with what the author actually wrote.
+- Call get_claim_passages for the weak concept and teach from those excerpts.
+- Cite the paragraph_ids attached to that claim, like [@u0000:p0]. Never invent ids or ranges.
+- Contrast what they said with what the author actually wrote in those paragraphs.
 - Offer a different angle than the first teaching pass (a concrete example, a distinction, a failure case).
 - Ask at most one question, then stop and wait. Do not answer it yourself. Do not bring the test back in the same turn.
 - Do not close the session or ask if they have other questions. After they reconstruct the weak claim, stop. They will use Ready to be tested when they want the written question again.
@@ -394,11 +397,18 @@ async def inject_briefing(request: ModelRequest, handler) -> ModelResponse:
     )
 
 
+def scope_search_unit(state: dict | None, requested: str | None = None) -> str | None:
+    current = (state or {}).get("current_chapter_id")
+    return current or requested
+
+
 @tool
 async def search_book(query: str, unit_id: str | None = None, runtime: ToolRuntime = None) -> list[dict]:
-    """Search this copy's text. Pass the current unit_id to stay inside this unit. Returns quotes plus paragraph_id for [@id] citations."""
-    cid = copy_id_of(runtime.state if runtime is not None else None)
-    hits = await asearch(cid, query, unit_id=unit_id, k=5)
+    """Search the current unit only. Returns quotes plus paragraph_id for [@id] citations."""
+    state = runtime.state if runtime is not None else None
+    cid = copy_id_of(state)
+    scoped = scope_search_unit(state, unit_id)
+    hits = await asearch(cid, query, unit_id=scoped, k=5)
     return [
         {
             "paragraph_id": hit["paragraph_id"],
@@ -414,10 +424,21 @@ async def search_book(query: str, unit_id: str | None = None, runtime: ToolRunti
 
 @tool("get_chapter_outline")
 def get_chapter_outline_tool(unit_id: str | None = None, runtime: ToolRuntime = None) -> dict:
-    """Return the argument skeleton of a unit: headings and opening sentences, not the full text."""
-    cid = copy_id_of(runtime.state if runtime is not None else None)
-    target = unit_id or (runtime.state.get("current_chapter_id") if runtime is not None else None) or first_unit_id(cid)
+    """Return the argument skeleton of the current unit: headings and opening sentences, not the full text."""
+    state = runtime.state if runtime is not None else None
+    cid = copy_id_of(state)
+    target = scope_search_unit(state, unit_id) or first_unit_id(cid)
     return get_chapter_outline(cid, target)
+
+
+@tool
+def get_claim_passages(concept: str | None = None, runtime: ToolRuntime = None) -> list[dict]:
+    """Return the exam's own paragraphs for a claim in this unit. Use this before teaching or reteaching that claim."""
+    state = runtime.state if runtime is not None else {}
+    cid = copy_id_of(state)
+    unit_id = state.get("current_chapter_id") or first_unit_id(cid)
+    unit = get_unit(cid, unit_id) or {}
+    return claim_passages(unit, concept)
 
 
 def ensure_unit_exam(copy_id: str, unit: dict) -> list[dict]:
@@ -581,18 +602,23 @@ async def judge_node(state: TutorState) -> dict:
             match = next((a for a in answers if isinstance(a, dict) and a.get("id") == question.get("id")), None)
             answer = (match or {}).get("answer", "")
         paired.append({"question": question, "answer": answer})
-    source_texts = [paragraph.get("text") or "" for paragraph in unit.get("paragraphs") or []]
+    texts = {paragraph.get("paragraph_id"): paragraph.get("text") or "" for paragraph in unit.get("paragraphs") or []}
+    source_texts = list(texts.values())
     for item in paired:
-        item["recitation"] = is_mostly_recitation(item["answer"], source_texts)
+        cited = [texts[pid] for pid in (item["question"].get("paragraph_ids") or []) if pid in texts]
+        item["recitation"] = is_mostly_recitation(item["answer"], cited or source_texts)
     concepts = [q.get("concept") or q.get("prompt", "") for q in questions]
-    passages = await _passages_for(cid, unit_id, " ".join(concepts) or unit.get("title", ""), k=8)
+    passages = passages_for_questions(unit, paired and [item["question"] for item in paired] or questions)
+    if not passages:
+        passages = await _passages_for(cid, unit_id, " ".join(concepts) or unit.get("title", ""), k=8)
     model = init_chat_model("gpt-4o")
     judgment = await model.with_structured_output(Judgment).ainvoke(
         [
             SystemMessage(
                 content=(
                     "You are a close-reading tutor scoring a short-answer test on this unit. "
-                    "Score each answer against the passages, not a modern textbook rewrite. "
+                    "Score each answer against the passages attached to that question, not a nearby chapter or a modern rewrite. "
+                    "When you cite, use that question's paragraph_ids. "
                     "miss = wrong, empty, 'I don't know', or a recitation of the author's sentences; "
                     "partial = some of the idea, missing a mechanism the author insists on; "
                     "mastered = could teach it in their own words. "
@@ -664,8 +690,8 @@ async def judge_node(state: TutorState) -> dict:
     }
 
 
-teach_tools = [search_book, get_chapter_outline_tool]
-revise_tools = [search_book, get_chapter_outline_tool]
+teach_tools = [get_claim_passages, search_book, get_chapter_outline_tool]
+revise_tools = [get_claim_passages, search_book, get_chapter_outline_tool]
 
 teach_agent = create_agent(
     model="gpt-4o",

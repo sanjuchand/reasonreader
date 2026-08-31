@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
@@ -21,7 +22,7 @@ Rules:
 - claim: one sentence of the author's argument, not a modern slogan or textbook rewrite.
 - prompt: the exam wording the student will answer in their own words.
 - concept: a short label for that claim.
-- Use only paragraph_ids that appear in the passages.
+- Every question MUST include paragraph_ids copied from the passages below. If you cannot point to a passage, drop the question.
 - Prefer mechanism, distinction, or consequence over trivia or chapter-plan recitation.
 """
 
@@ -39,13 +40,47 @@ class UnitExam(BaseModel):
     questions: list[UnitQuestion] = Field(min_length=2, max_length=3)
 
 
-def unit_exam_source(unit: dict, *, max_paragraphs: int = 16) -> str:
+def unit_exam_source(unit: dict, *, max_paragraphs: int | None = None) -> str:
+    paragraphs = unit.get("paragraphs") or []
+    if max_paragraphs is not None:
+        paragraphs = paragraphs[:max_paragraphs]
     lines = []
-    for paragraph in (unit.get("paragraphs") or [])[:max_paragraphs]:
+    for paragraph in paragraphs:
         pid = paragraph.get("paragraph_id") or ""
         text = (paragraph.get("text") or "")[:700]
         lines.append(f"[{pid}] {text}")
     return "\n\n".join(lines)
+
+
+def _content_words(text: str) -> set[str]:
+    return {word for word in re.findall(r"[a-z0-9']+", (text or "").lower()) if len(word) > 4}
+
+
+def claim_is_on_the_page(claim: str, passages: str, *, threshold: float = 0.28) -> bool:
+    needles = _content_words(claim)
+    if len(needles) < 3:
+        return False
+    hay = _content_words(passages)
+    return (len(needles & hay) / len(needles)) >= threshold
+
+
+def bind_questions_to_unit(unit: dict, questions: list[dict]) -> list[dict]:
+    """Drop claims the model pinned to another place, or invented from the title."""
+    allowed = {
+        paragraph.get("paragraph_id"): paragraph.get("text") or ""
+        for paragraph in unit.get("paragraphs") or []
+        if paragraph.get("paragraph_id")
+    }
+    bound = []
+    for question in questions:
+        pids = [pid for pid in (question.get("paragraph_ids") or []) if pid in allowed]
+        if not pids:
+            continue
+        passage = " ".join(allowed[pid] for pid in pids)
+        if not claim_is_on_the_page(question.get("claim") or "", passage):
+            continue
+        bound.append({**question, "paragraph_ids": pids})
+    return bound
 
 
 def generate_questions_for_unit(unit: dict) -> list[dict]:
@@ -65,7 +100,7 @@ def generate_questions_for_unit(unit: dict) -> list[dict]:
             ),
         ]
     )
-    return [question.model_dump() for question in exam.questions]
+    return bind_questions_to_unit(unit, [question.model_dump() for question in exam.questions])
 
 
 def attach_questions(units: list[dict], *, max_workers: int = 2) -> list[dict]:

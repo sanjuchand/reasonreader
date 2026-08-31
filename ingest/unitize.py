@@ -6,8 +6,14 @@ from ingest.constants import (
     MAX_CHUNK_WORDS,
     MIN_CHUNK_WORDS,
     MIN_TAIL_WORDS,
+    MIN_UNIT_WORDS,
     SOFT_CAP,
     WORD_CAP,
+)
+
+FRONT_MATTER_RE = re.compile(
+    r"\b(copyright|isbn|all rights reserved|library of congress|printed in)\b",
+    re.I,
 )
 
 
@@ -146,6 +152,26 @@ def build_units(chapters: list[dict], *, track_smith_books: bool = False) -> lis
                 }
             )
     return units
+
+
+def is_usable_unit(unit: dict) -> bool:
+    words = unit.get("word_count") or 0
+    if words < MIN_UNIT_WORDS:
+        return False
+    paragraphs = unit.get("paragraphs") or []
+    if not paragraphs:
+        return False
+    short = sum(1 for para in paragraphs if word_count(para.get("text") or "") <= 8)
+    if short / len(paragraphs) >= 0.7:
+        return False
+    head = " ".join((para.get("text") or "") for para in paragraphs[:10])
+    if FRONT_MATTER_RE.search(head) and words < 500:
+        return False
+    return True
+
+
+def usable_units(units: list[dict]) -> list[dict]:
+    return [unit for unit in units if is_usable_unit(unit)]
 
 
 def assign_opaque_ids(units: list[dict]) -> list[dict]:
