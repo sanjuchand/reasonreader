@@ -115,19 +115,79 @@ def filter_unit_questions(questions: list[dict], weak: list[str] | None = None) 
 def student_quiz(questions: list[dict]) -> dict:
     return {
         "questions": [
-            {key: question[key] for key in ("id", "prompt", "concept", "kind") if key in question}
+            {
+                key: question[key]
+                for key in ("id", "prompt", "concept", "kind", "paragraph_ids")
+                if key in question
+            }
             for question in questions
         ]
     }
+
+
+def paragraph_map(unit: dict) -> dict[str, str]:
+    return {
+        paragraph.get("paragraph_id"): paragraph.get("text") or ""
+        for paragraph in unit.get("paragraphs") or []
+        if paragraph.get("paragraph_id")
+    }
+
+
+def claim_passages(unit: dict, concept: str | None = None) -> list[dict]:
+    """Passages the exam attached to a claim — not a search hit."""
+    texts = paragraph_map(unit)
+    rows = []
+    needle = (concept or "").strip().lower()
+    for question in unit.get("questions") or []:
+        label = (question.get("concept") or "").lower()
+        if needle and needle not in label and label not in needle:
+            continue
+        excerpts = []
+        for pid in question.get("paragraph_ids") or []:
+            if pid in texts:
+                excerpts.append({"paragraph_id": pid, "quote": texts[pid][:700]})
+        rows.append(
+            {
+                "concept": question.get("concept"),
+                "claim": question.get("claim"),
+                "paragraph_ids": [item["paragraph_id"] for item in excerpts],
+                "passages": excerpts,
+            }
+        )
+    return rows
+
+
+def passages_for_questions(unit: dict, questions: list[dict]) -> str:
+    texts = paragraph_map(unit)
+    lines = []
+    seen: set[str] = set()
+    for question in questions or []:
+        for pid in question.get("paragraph_ids") or []:
+            if pid in seen or pid not in texts:
+                continue
+            seen.add(pid)
+            lines.append(f"[{pid}] {texts[pid][:700]}")
+    return "\n\n".join(lines)
 
 
 def claim_lines(unit: dict) -> str:
     questions = unit.get("questions") or []
     if not questions:
         return "No stored exam yet. Teach the load-bearing claims in this unit from the text."
-    lines = ["Teach toward these claims. Do not recite an exam. Do not skip a claim."]
+    texts = paragraph_map(unit)
+    lines = [
+        "Teach toward these claims, from the attached paragraphs only.",
+        "Each claim lists the paragraph_ids you must cite. Do not substitute a famous nearby passage.",
+        "Do not recite the exam prompt. Do not skip a claim.",
+    ]
     for question in questions:
+        pids = [pid for pid in (question.get("paragraph_ids") or []) if pid in texts]
+        excerpt = (texts[pids[0]][:220] if pids else "").strip()
         lines.append(f"- [{question.get('concept')}] {question.get('claim') or question.get('prompt')}")
+        if pids:
+            lines.append(f"  Cite: {', '.join(f'[@{pid}]' for pid in pids)}")
+        if excerpt:
+            lines.append(f'  From the page: "{excerpt}"')
     return "\n".join(lines)
 
 

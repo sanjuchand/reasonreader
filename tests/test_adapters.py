@@ -1,6 +1,6 @@
 from ingest.epub import parse_epub
 from ingest.pdf import parse_pdf
-from ingest.unitize import assign_opaque_ids, build_units
+from ingest.unitize import assign_opaque_ids, build_units, is_usable_unit
 
 
 def test_epub_extracts_chapter_and_paragraph(tmp_path):
@@ -45,3 +45,31 @@ def test_pdf_extracts_text():
     blob = " ".join(p["text"] for unit in units for p in unit["paragraphs"])
     assert "pin factory" in blob.lower()
     assert title
+
+
+def test_front_matter_and_stub_units_are_dropped():
+    copyright_page = {
+        "id": "u-tmp",
+        "title": "Denies,",
+        "word_count": 90,
+        "paragraphs": [
+            {"text": "THE NUMBER NOBODY CHECKS"},
+            {"text": "Copyright © 2026 by the author. Paperback ISBN: 979-8-000000-0-0"},
+            {"text": "No part of this book may be reproduced."},
+        ],
+    }
+    stub = {
+        "id": "u-stub",
+        "title": "How a price is made",
+        "word_count": 1,
+        "paragraphs": [{"text": "answer."}],
+    }
+    chapter = {
+        "id": "u-real",
+        "title": "The architecture of a mistake",
+        "word_count": 280,
+        "paragraphs": [{"text": " ".join(["price"] * 280)}],
+    }
+    assert is_usable_unit(copyright_page) is False
+    assert is_usable_unit(stub) is False
+    assert is_usable_unit(chapter) is True
