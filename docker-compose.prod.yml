@@ -47,6 +47,26 @@ services:
       minio:
         condition: service_started
 
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.graph
+    restart: unless-stopped
+    command: ["uv", "run", "python", "-m", "ingest.http_server"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-reasonreader}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-won}
+      S3_ENDPOINT: http://minio:9000
+      INGEST_PORT: "8090"
+      INGEST_TOKEN: ${SECRET_KEY}
+    ports:
+      - "127.0.0.1:8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
   web:
     build:
       context: ./web
@@ -59,6 +79,8 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-reasonreader}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-won}
       LANGGRAPH_URL: http://graph:2024
+      INGEST_URL: http://ingest:8090
+      INGEST_TOKEN: ${SECRET_KEY}
       S3_ENDPOINT: http://minio:9000
     ports:
       - "127.0.0.1:3080:3000"
@@ -66,6 +88,8 @@ services:
       postgres:
         condition: service_healthy
       graph:
+        condition: service_started
+      ingest:
         condition: service_started
 
 volumes:
